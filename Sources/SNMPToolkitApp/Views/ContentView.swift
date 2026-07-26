@@ -7,7 +7,7 @@ struct ContentView: View {
             Image(systemName: "network")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
-            Text("AI SNMP Toolkit")
+            Text("META SNMP TOOLKIT")
                 .font(.largeTitle.weight(.semibold))
             Text("MIBKit \(MIBKit.version)")
                 .font(.callout)

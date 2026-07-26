@@ -1,4 +1,4 @@
-# meta-snmp — AI SNMP Toolkit
+# meta-snmp — META SNMP TOOLKIT
 
 A macOS app for collecting, browsing and interrogating SNMP agent data — sold on the
 Mac App Store.
