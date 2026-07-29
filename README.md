@@ -1,4 +1,4 @@
-# meta-snmp — AI SNMP Toolkit
+# meta-snmp — META SNMP TOOLKIT
 
 A macOS app for collecting, browsing and interrogating SNMP agent data — sold on the
 Mac App Store.
@@ -33,5 +33,12 @@ No third-party runtime dependencies. macOS 14+.
 
 ```bash
 swift build
+```
+
+```bash
 swift test
 ```
+
+Building needs only the Swift toolchain. **Running the tests needs a full Xcode
+install** — the test frameworks are not part of the Command Line Tools, so `swift test`
+fails with `no such module 'XCTest'` on a CLT-only machine.
