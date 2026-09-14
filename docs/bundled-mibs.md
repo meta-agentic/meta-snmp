@@ -2,8 +2,8 @@
 
 C-6 requires the app to be fully functional with no internet connectivity, so the
 standard MIB modules cannot be fetched on demand — they ship inside the bundle.
-This document is the record of *which* modules ship and why, as the acceptance
-criteria of SNMP-24 require. Licences are recorded separately, in `NOTICE`.
+This document is the record of *which* modules ship and why. Licences are
+recorded separately, in `NOTICE`.
 
 The files live in `Sources/MIBKit/Resources/StandardMIBs/` and are declared as a
 SwiftPM resource of the `MIBKit` target.
@@ -35,13 +35,13 @@ SwiftPM resource of the `MIBKit` target.
 
 ### Additions to the candidate set
 
-The candidate set named in SNMP-24 AC1 was 15 modules. Three were added, all for
-the same reason: `ENTITY-MIB` (RFC 6933, Entity MIB version 4) imports
-`SnmpAdminString` from `SNMP-FRAMEWORK-MIB`, `UUIDorZero` from `UUID-TC-MIB`, and
-`IANAPhysicalClass` from `IANA-ENTITY-MIB`. AC5 requires `IMPORTS` across the
-bundled set to resolve entirely within the bundle — no bundled module may depend
-on a module the user has to supply — so shipping `ENTITY-MIB` without these three
-would have left a hole the user cannot fill.
+The candidate set was 15 modules. Three were added, all for the same reason:
+`ENTITY-MIB` (RFC 6933, Entity MIB version 4) imports `SnmpAdminString` from
+`SNMP-FRAMEWORK-MIB`, `UUIDorZero` from `UUID-TC-MIB`, and `IANAPhysicalClass`
+from `IANA-ENTITY-MIB`. `IMPORTS` across the bundled set must resolve entirely
+within the bundle — no bundled module may depend on a module the user has to
+supply, or C-6's offline guarantee is hollow — so shipping `ENTITY-MIB` without
+these three would have left a hole the user cannot fill.
 
 `URI-TC-MIB` (RFC 5017) was fetched as a fourth candidate addition and then
 dropped: nothing in the set imports from it. `ENTITY-MIB` version 4 carries no
@@ -71,8 +71,7 @@ users actually reach `RFC1213-MIB` for are covered: the system group by
 `SNMPv2-MIB`, the interfaces group by `IF-MIB`, and the ip/tcp/udp groups by
 `IP-MIB`, `TCP-MIB` and `UDP-MIB`.
 
-Reversing this decision requires citing a parser change that makes SMIv1 compile,
-per SNMP-24 AC2.
+Reversing this decision requires citing a parser change that makes SMIv1 compile.
 
 ## Extraction
 
@@ -96,23 +95,25 @@ structural properties this relies on — every file opens with its own
 This set is the baseline corpus that SC-0 measures against. SC-0 requires every
 OID resolution, enumeration label, DISPLAY-HINT rendering and decoded table index
 over the bundled set to match `net-snmp`'s `snmptranslate` and `snmpwalk -O`
-output. SNMP-48 AC11's corpus definition refers to the files listed in the table
-above; the two lists are the same list, and changing one changes the other.
+output. The conformance corpus and the table above are the same list of files:
+changing one changes the other.
 
-## What this document does not yet cover
+## What is not proved yet
 
-`swift test` proves the resource is present, complete, licence-recorded, import-
-closed and lazily read. Two of SNMP-24's criteria cannot be closed until their
-dependencies land, and are tracked there rather than silently assumed here:
+The test suite proves the resource is present, complete, licence-recorded,
+import-closed and lazily read. Four further properties depend on work that has
+not landed, and are called out here rather than silently assumed:
 
-- **AC5, "compiles with zero diagnostics"** — needs the SMIv2 parser (SNMP-20,
-  TO DO). The import-closure half of AC5 is checked now, textually.
-- **AC6, offline `ifInOctets` ↔ `1.3.6.1.2.1.2.2.1.10` resolution and the
-  `ifOperStatus` enumeration label** — needs the parser and the registration tree
-  (SNMP-20, SNMP-21).
-- **AC7's measurement** — the loader is lazy by construction and a test proves no
-  module is read until it is asked for, but the cold-launch comparison against an
-  empty resource directory needs the app's launch instrumentation (NFR-6).
-- **AC8's sandbox half** — the resource is declared and readable under
-  `swift test`; reading it from the App Sandbox in a signed build needs SNMP-39,
-  and signing needs SNMP-44.
+- **Every bundled module compiles with zero diagnostics** — needs the SMIv2
+  parser. The import-closure half of that check is done now, textually.
+- **Offline `ifInOctets` ↔ `1.3.6.1.2.1.2.2.1.10` resolution in both directions
+  (FR-9), and `ifOperStatus` rendering its enumeration label rather than an
+  integer (FR-10)** — needs the parser and the OID registration tree.
+- **The NFR-7 measurement.** The loader is lazy by construction and a test proves
+  no module is read until it is asked for, but comparing cold launch with the
+  bundle present against cold launch with the resource directory empty needs the
+  app's launch instrumentation (NFR-6). A measurement showing the set is compiled
+  at launch is a failure regardless of the absolute number.
+- **Reading the resource from the App Sandbox in a signed build.** The resource
+  is declared and readable under `swift test`; a resource that works there but
+  not in the sandboxed app has not satisfied this requirement.

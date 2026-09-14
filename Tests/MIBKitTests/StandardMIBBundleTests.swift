@@ -3,13 +3,14 @@ import XCTest
 
 @testable import MIBKit
 
-/// The checks SNMP-24 asks to be mechanical rather than asserted in prose.
+/// The bundling checks the specification requires to be mechanical rather than
+/// asserted in prose.
 ///
 /// The set itself, and the reason each module is in it, are recorded in
 /// `docs/bundled-mibs.md`; the licences are recorded in `NOTICE`.
 final class StandardMIBBundleTests: XCTestCase {
 
-    /// The candidate set from SNMP-24 AC1, plus the three additions ENTITY-MIB's
+    /// The recorded module set, including the three additions ENTITY-MIB's
     /// IMPORTS force. Written out here so that adding or removing a file from the
     /// resource directory without recording the change fails the build.
     static let expectedModules: Set<String> = [
@@ -20,7 +21,7 @@ final class StandardMIBBundleTests: XCTestCase {
         "SNMP-FRAMEWORK-MIB", "UUID-TC-MIB", "IANA-ENTITY-MIB",
     ]
 
-    // MARK: - AC1: the set is what it says it is
+    // MARK: - The set is what it says it is
 
     func testBundleContainsExactlyTheRecordedSet() async throws {
         let names = Set(try await StandardMIBBundle.shared.moduleNames())
@@ -29,12 +30,12 @@ final class StandardMIBBundleTests: XCTestCase {
             """
             The bundled module set differs from the set recorded in \
             docs/bundled-mibs.md. Additions and removals must be recorded with a \
-            reason (SNMP-24 AC1).
+            reason.
             """
         )
     }
 
-    // MARK: - AC2: RFC1213-MIB is not bundled
+    // MARK: - RFC1213-MIB is not bundled
 
     func testRFC1213MIBIsNotBundled() async throws {
         let names = try await StandardMIBBundle.shared.moduleNames()
@@ -43,12 +44,12 @@ final class StandardMIBBundleTests: XCTestCase {
             """
             RFC1213-MIB is SMIv1 and §5 states the parser will not compile it. \
             Bundling it ships a file the product rejects. Reversing this requires \
-            citing a parser change that makes it compile (SNMP-24 AC2).
+            citing a parser change that makes it compile.
             """
         )
     }
 
-    // MARK: - AC3: every bundled file is licence-recorded
+    // MARK: - Every bundled file is licence-recorded (C-9)
 
     func testEveryBundledFileIsListedInNOTICE() async throws {
         let notice = try String(contentsOf: Self.repositoryRoot.appending(path: "NOTICE"), encoding: .utf8)
@@ -75,7 +76,7 @@ final class StandardMIBBundleTests: XCTestCase {
         )
     }
 
-    // MARK: - AC5 (the half that does not need the parser): IMPORTS are closed
+    // MARK: - IMPORTS are closed over the bundle
 
     func testImportsResolveEntirelyWithinTheBundle() async throws {
         let bundle = StandardMIBBundle.shared
@@ -93,12 +94,12 @@ final class StandardMIBBundleTests: XCTestCase {
             unresolved, [],
             """
             No bundled module may depend on a module the user has to supply \
-            (SNMP-24 AC5).
+            — C-9's offline guarantee has no meaning otherwise.
             """
         )
     }
 
-    // MARK: - AC7: the set is read lazily, not at launch
+    // MARK: - The set is read lazily, not at launch (NFR-7)
 
     func testNoModuleIsReadUntilItIsAskedFor() async throws {
         let bundle = StandardMIBBundle()
@@ -127,7 +128,7 @@ final class StandardMIBBundleTests: XCTestCase {
         XCTAssertEqual(loaded, 1, "A second request for the same module must be served from cache.")
     }
 
-    // MARK: - AC8: the resource is readable from the bundle
+    // MARK: - The resource is readable from the bundle
 
     func testEveryBundledModuleIsReadableAndWellFormed() async throws {
         let bundle = StandardMIBBundle.shared
