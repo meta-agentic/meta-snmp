@@ -14,8 +14,8 @@ for: a file present in the bundle but absent from this NOTICE is a defect.
 Each entry was checked against its source document on 2026-09-14.
 
 
-1. Modules from RFCs published before BCP 78 (RFC 3978)
--------------------------------------------------------
+1. Modules from RFCs published before BCP 78
+---------------------------------------------
 
 These RFCs carry the Full Copyright Statement of the Internet Standards process,
 which grants directly to everyone:
@@ -53,12 +53,12 @@ file — this NOTICE carries it on the bundle's behalf.
   Rights Reserved.
 
 
-2. Modules from RFCs published under BCP 78 (RFC 3978 / RFC 4748)
-------------------------------------------------------------------
+2. Modules from RFCs published under BCP 78, before the Trust Legal Provisions
+-------------------------------------------------------------------------------
 
 These RFCs replace the inline grant with a reference: "This document is subject
-to the rights, licenses and restrictions contained in BCP 78". BCP 78 is
-RFC 3978, whose §3.3(a)(E) names MIB modules explicitly and grants the right
+to the rights, licenses and restrictions contained in BCP 78". The operative
+grant is BCP 78 §3.3(a)(E), which names MIB modules explicitly and permits
 
     to extract, copy, publish, display, distribute, modify and
     incorporate into other works, for any purpose (and not limited to
@@ -66,17 +66,31 @@ RFC 3978, whose §3.3(a)(E) names MIB modules explicitly and grants the right
     fragments that are included in any IETF Document (such as MIB and
     PIB modules)
 
-That grant runs to ISOC and the IETF rather than directly to the public; the
-downstream licence is the one the IETF Trust issues on the strength of it,
-under its Legal Provisions Relating to IETF Documents
-(https://trustee.ietf.org/license-info), which license Code Components — MIB
-modules among them — under the Revised BSD Licence. Redistribution in source and
-binary form is permitted, with no non-commercial restriction, so these files are
-compatible with paid distribution.
+The IETF Trust states in its Frequently Asked Questions
+(https://trustee.ietf.org/about/faq/) that this is the licence under which such
+modules are used:
 
-This is the one group in this file that rests on a licence chain rather than on a
-single grant appearing on the face of the document, and it is flagged as such for
-review.
+    Code Components that are embedded or included in IETF Documents
+    published during the period of RFC 5378 effectiveness, March 2005 to
+    November 10, 2008, can be used, copied, distributed and modified in
+    any manner under the license grant contained in 3.3.a.E.
+
+"In any manner", with no non-commercial restriction and no attribution
+condition — so these files are compatible with paid distribution.
+
+The Revised BSD Licence is deliberately *not* cited for this group. It does not
+reach a document of this vintage. The Trust Legal Provisions apply to RFCs
+published after their effective date, and RFC 5378 §2.1, "No Retroactive Effect",
+states that it "does not retroactively obtain additional rights from
+Contributions that predate the date that the IETF Trust announces the adoption of
+these procedures". The Trust's FAQ draws the same line, putting Revised BSD only
+on Code Components published on or after 10 November 2008. The §3.3(a)(E) grant
+that does apply here is the broader of the two.
+
+`INET-ADDRESS-MIB` (RFC 4001, February 2005) is dated just before RFC 3978 took
+the BCP 78 slot, but the document itself invokes BCP 78, and the RFC occupying
+that slot at the time — RFC 3667 — carries §3.3(a)(E) in identical wording, MIB
+modules named. The grant covers it either way.
 
 - INET-ADDRESS-MIB.mib — RFC 4001 — Copyright (C) The Internet Society (2005).
 - TCP-MIB.mib — RFC 4022 — Copyright (C) The Internet Society (2005).
