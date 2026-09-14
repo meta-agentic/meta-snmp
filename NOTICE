@@ -1,0 +1,142 @@
+NOTICE
+======
+
+This product bundles third-party MIB modules. They are reproduced from the
+published sources named below with only RFC page furniture removed (running
+headers, "[Page N]" footers, form feeds) and the common leading indentation
+stripped. No MIB text is altered.
+
+Every file in `Sources/MIBKit/Resources/StandardMIBs/` must appear in a
+`- <file>.mib — ...` entry below. `StandardMIBBundleTests` compares the two
+mechanically and fails the build if they diverge, which is the check C-9 asks
+for: a file present in the bundle but absent from this NOTICE is a defect.
+
+Each entry was checked against its source document on 2026-09-14.
+
+
+1. Modules from RFCs published before BCP 78 (RFC 3978)
+-------------------------------------------------------
+
+These RFCs carry the Full Copyright Statement of the Internet Standards process,
+which grants directly to everyone:
+
+    This document and translations of it may be copied and furnished to
+    others, and derivative works that comment on or otherwise explain it
+    or assist in its implementation may be prepared, copied, published
+    and distributed, in whole or in part, without restriction of any
+    kind, provided that the above copyright notice and this paragraph are
+    included on all such copies and derivative works.
+
+Reproducing a MIB module so that an implementation can interpret agent data is
+"assist in its implementation". The grant is "without restriction of any kind"
+and is stated to be perpetual and irrevocable; it is not limited to
+non-commercial use, so it is compatible with paid distribution (C-9). Its one
+condition is that the copyright notice travels with the copy. That statement sits
+outside the module body in the RFC, so it is not present in the extracted `.mib`
+file — this NOTICE carries it on the bundle's behalf.
+
+- SNMPv2-SMI.mib — RFC 2578 §15 — Copyright (C) The Internet Society (1999).
+  All Rights Reserved.
+- SNMPv2-TC.mib — RFC 2579 §9 — Copyright (C) The Internet Society (1999). All
+  Rights Reserved.
+- SNMPv2-CONF.mib — RFC 2580 §11 — Copyright (C) The Internet Society (1999).
+  All Rights Reserved.
+- HOST-RESOURCES-MIB.mib — RFC 2790 §12 — Copyright (C) The Internet Society
+  (2000). All Rights Reserved.
+- IF-MIB.mib — RFC 2863 §13 — Copyright (C) The Internet Society (2000). All
+  Rights Reserved.
+- SNMP-FRAMEWORK-MIB.mib — RFC 3411, Full Copyright Statement (unnumbered back
+  matter) — Copyright (C) The Internet Society (2002). All Rights Reserved.
+- SNMPv2-TM.mib — RFC 3417 §16 — Copyright (C) The Internet Society (2002). All
+  Rights Reserved.
+- SNMPv2-MIB.mib — RFC 3418 §9 — Copyright (C) The Internet Society (2002). All
+  Rights Reserved.
+
+
+2. Modules from RFCs published under BCP 78 (RFC 3978 / RFC 4748)
+------------------------------------------------------------------
+
+These RFCs replace the inline grant with a reference: "This document is subject
+to the rights, licenses and restrictions contained in BCP 78". BCP 78 is
+RFC 3978, whose §3.3(a)(E) names MIB modules explicitly and grants the right
+
+    to extract, copy, publish, display, distribute, modify and
+    incorporate into other works, for any purpose (and not limited to
+    use within the IETF Standards Process) any executable code or code
+    fragments that are included in any IETF Document (such as MIB and
+    PIB modules)
+
+That grant runs to ISOC and the IETF rather than directly to the public; the
+downstream licence is the one the IETF Trust issues on the strength of it,
+under its Legal Provisions Relating to IETF Documents
+(https://trustee.ietf.org/license-info), which license Code Components — MIB
+modules among them — under the Revised BSD Licence. Redistribution in source and
+binary form is permitted, with no non-commercial restriction, so these files are
+compatible with paid distribution.
+
+This is the one entry in this file that rests on a licence chain rather than a
+single grant on the face of the document. SNMP-43 Q5 owns ratifying it.
+
+- INET-ADDRESS-MIB.mib — RFC 4001 — Copyright (C) The Internet Society (2005).
+- TCP-MIB.mib — RFC 4022 — Copyright (C) The Internet Society (2005).
+- UDP-MIB.mib — RFC 4113 — Copyright (C) The Internet Society (2005).
+- BRIDGE-MIB.mib — RFC 4188 — Copyright (C) The Internet Society (2005).
+- IP-MIB.mib — RFC 4293 — Copyright (C) The Internet Society (2006).
+
+
+3. Modules from RFCs published under the IETF Trust Legal Provisions
+---------------------------------------------------------------------
+
+RFC 6933 post-dates the TLP. Both modules carry the licence notice inside their
+own DESCRIPTION clause, so it ships with the file:
+
+    Copyright (c) 2013 IETF Trust and the persons identified as authors
+    of the code. All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, is permitted pursuant to, and subject to the license
+    terms contained in, the Simplified BSD License set forth in Section
+    4.c of the IETF Trust's Legal Provisions Relating to IETF Documents
+    (http://trustee.ietf.org/license-info).
+
+- ENTITY-MIB.mib — RFC 6933 — IETF Trust (2013), BSD licence per TLP §4.c.
+- UUID-TC-MIB.mib — RFC 6933 — IETF Trust (2013), BSD licence per TLP §4.c.
+
+
+4. Modules from IANA protocol registries
+-----------------------------------------
+
+These are IANA-maintained registry files downloaded from
+https://www.iana.org/assignments/. The Joint Statement of IANA and IETF
+Concerning Copyright Rights in the Protocol Registries, dated 10 November 2021
+(https://www.iana.org/help/licensing-terms), states that the Protocol Registries
+"may be freely used by any party for any purpose" and dedicates any applicable
+copyright in them to the public domain under the Creative Commons CC0 1.0
+dedication. CC0 places no restriction on commercial or paid redistribution.
+
+- IANAifType-MIB.mib —
+  https://www.iana.org/assignments/ianaiftype-mib/ianaiftype-mib
+  — CC0 1.0 per the 2021 Joint Statement. Registry references RFC 2863 and
+  RFC 8892. Bundled revision: LAST-UPDATED 202603170000Z.
+- IANA-ADDRESS-FAMILY-NUMBERS-MIB.mib —
+  https://www.iana.org/assignments/ianaaddressfamilynumbers-mib/ianaaddressfamilynumbers-mib
+  — CC0 1.0 per the 2021 Joint Statement. Registry references RFC 2677. Bundled
+  revision: LAST-UPDATED 202110190000Z.
+- IANA-ENTITY-MIB.mib —
+  https://www.iana.org/assignments/ianaentity-mib/ianaentity-mib
+  — CC0 1.0 per the 2021 Joint Statement. The file additionally carries its own
+  notice: Copyright (c) 2013 IETF Trust and the persons identified as authors of
+  the code, redistribution permitted under the Simplified BSD Licence in Section
+  4.c of the IETF Trust's Legal Provisions. Initial version published in
+  RFC 6933.
+
+
+Candidates removed for licence reasons
+--------------------------------------
+
+None. Every module in the candidate set enumerated in `docs/bundled-mibs.md` is
+redistributable in a paid binary under the terms above, so nothing was dropped on
+licensing grounds and no functionality is lost to C-9.
+
+`RFC1213-MIB` is absent from the bundle, but for a technical reason rather than a
+licensing one; see `docs/bundled-mibs.md`.
