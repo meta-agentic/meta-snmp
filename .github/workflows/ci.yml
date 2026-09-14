@@ -1,0 +1,109 @@
+name: CI
+
+# Build and test the SwiftPM package on a hosted macOS runner.
+#
+# This workflow deliberately uses no third-party action beyond actions/checkout.
+# C-2 rejects third-party runtime dependencies on supply-chain grounds, and that
+# argument does not stop at the runtime boundary: an action is code this
+# repository executes with write access to its own checkout.
+#
+# It also requires no secrets. CI must never need the signing identity, the
+# Developer Program membership, or a reachable SNMP agent — a fork must be able
+# to run this workflow green.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test
+    # macos-latest, not a pinned image. C-1 requires Swift 6 and macOS 14, and
+    # the point of the assertions below is that a runner-image change which drops
+    # below either fails the build loudly instead of passing it quietly. Pinning
+    # would hide exactly the change these steps exist to catch.
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record the toolchain and assert Swift 6 or later
+        run: |
+          set -euo pipefail
+          swift --version
+          version="$(swift --version 2>&1 | sed -n 's/.*Apple Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)"
+          if [ -z "$version" ]; then
+            echo "::error::Could not parse a Swift version out of 'swift --version'."
+            exit 1
+          fi
+          echo "Parsed Swift version: $version"
+          if [ "${version%%.*}" -lt 6 ]; then
+            echo "::error::C-1 requires Swift 6 or later; this runner has $version."
+            exit 1
+          fi
+
+      - name: Assert the package targets macOS 14 or later
+        run: |
+          set -euo pipefail
+          swift package dump-package > package.json
+          python3 - <<'PY'
+          import json, sys
+
+          package = json.load(open("package.json"))
+          macos = [p for p in package.get("platforms", []) if p.get("platformName") == "macos"]
+          if not macos:
+              sys.exit("::error::The package declares no macOS platform; C-1 requires macOS 14 or later.")
+          declared = macos[0]["version"]
+          print("Declared macOS deployment target:", declared)
+          if int(declared.split(".")[0]) < 14:
+              sys.exit(f"::error::C-1 requires macOS 14 or later; the package declares {declared}.")
+          PY
+          rm -f package.json
+
+      # NFR-9 requires the suite to pass with networking disabled. A green run
+      # that quietly reached the network is not evidence for that — it is the
+      # absence of evidence — so the mechanism is named here and then proved
+      # before it is relied on.
+      #
+      # Mechanism: the test process runs under sandbox-exec with the profile
+      # "(version 1)(allow default)(deny network*)", which denies every outbound
+      # socket operation, name resolution included. This step runs curl under the
+      # identical profile and fails the build if it succeeds, so a sandbox that
+      # stopped denying traffic is caught here rather than silently weakening the
+      # test step below.
+      - name: Prove the no-network sandbox actually denies the network
+        run: |
+          set -euo pipefail
+          profile='(version 1)(allow default)(deny network*)'
+          if sandbox-exec -p "$profile" /usr/bin/curl -sS --max-time 15 https://example.com > /dev/null 2>&1; then
+            echo "::error::The no-network sandbox did not deny outbound traffic. NFR-9 cannot be evidenced by this run."
+            exit 1
+          fi
+          echo "Sandbox denied an outbound request, as required."
+
+      # Building is not part of NFR-9's 60 s suite budget, so the test binaries
+      # are built here, untimed, and the timed step below only runs them.
+      - name: Build
+        run: |
+          set -euo pipefail
+          swift build
+          swift build --build-tests
+
+      # NFR-9's wall-time budget is enforced, not observed: a suite that grows
+      # past 60 s fails this step rather than merely running slower.
+      #
+      # --disable-sandbox turns off SwiftPM's *own* manifest sandbox, which
+      # cannot nest inside the outer one (sandbox_apply refuses). The outer
+      # sandbox-exec still applies to swift-test and every process it spawns, so
+      # the network stays denied; the flag makes the network denial possible
+      # rather than weakening it.
+      - name: Test — no network, 60 s budget
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          profile='(version 1)(allow default)(deny network*)'
+          sandbox-exec -p "$profile" swift test --skip-build --disable-sandbox
