@@ -13,7 +13,11 @@ let package = Package(
     ],
     targets: [
         .target(name: "SNMPCore"),
-        .target(name: "MIBKit"),
+        // The standard MIB set ships inside the bundle: C-6 requires the app to be
+        // fully functional with no internet connectivity, so it cannot be fetched
+        // on demand. `.copy` preserves the directory, which lets StandardMIBBundle
+        // enumerate the set without reading any module (NFR-7).
+        .target(name: "MIBKit", resources: [.copy("Resources/StandardMIBs")]),
         .target(name: "AIBridge", dependencies: ["SNMPCore", "MIBKit"]),
         .executableTarget(name: "snmpcli", dependencies: ["SNMPCore", "MIBKit"]),
         .executableTarget(
