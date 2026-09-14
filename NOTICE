@@ -74,8 +74,9 @@ modules among them — under the Revised BSD Licence. Redistribution in source a
 binary form is permitted, with no non-commercial restriction, so these files are
 compatible with paid distribution.
 
-This is the one entry in this file that rests on a licence chain rather than a
-single grant on the face of the document. SNMP-43 Q5 owns ratifying it.
+This is the one group in this file that rests on a licence chain rather than on a
+single grant appearing on the face of the document, and it is flagged as such for
+review.
 
 - INET-ADDRESS-MIB.mib — RFC 4001 — Copyright (C) The Internet Society (2005).
 - TCP-MIB.mib — RFC 4022 — Copyright (C) The Internet Society (2005).
