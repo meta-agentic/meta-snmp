@@ -49,6 +49,53 @@ final class StandardMIBBundleTests: XCTestCase {
         )
     }
 
+    // MARK: - The notice ships with the product (C-9)
+
+    /// The bundled modules may be redistributed only if the notice travels with
+    /// the copy, so a signed binary without it breaches the one condition the
+    /// grant carries. This asserts the shipped artifact, not the repository.
+    func testNoticeShipsInsideTheBundle() async throws {
+        let notice = try await StandardMIBBundle.shared.notice()
+        XCTAssertFalse(
+            notice.isEmpty,
+            """
+            NOTICE resolved to empty content inside the app bundle. The product \
+            must not ship the MIB modules without their notice.
+            """
+        )
+        // The condition is about the copyright notice specifically, so assert
+        // the operative sentence is really in there rather than just some file.
+        XCTAssertTrue(
+            notice.contains("included on all such copies"),
+            "The bundled NOTICE does not carry the Full Copyright Statement condition."
+        )
+    }
+
+    /// A resource entry can exist and still carry nothing readable — a symlinked
+    /// NOTICE copies as a dangling link and passes a presence-only check while
+    /// shipping no notice at all. Assert bytes, not existence.
+    func testBundledNoticeIsIdenticalToTheRepositoryCopy() async throws {
+        let bundled = try await StandardMIBBundle.shared.notice()
+        let repository = try String(
+            contentsOf: Self.repositoryRoot.appending(path: "NOTICE"), encoding: .utf8)
+        XCTAssertEqual(
+            bundled, repository,
+            """
+            The bundled NOTICE has drifted from the repository copy. They are \
+            two files on purpose — the root copy is what readers and GitHub see, \
+            the bundled copy is what ships — and they must stay byte-identical.
+            """
+        )
+    }
+
+    /// Reading the notice must not be what makes the bundle load modules.
+    func testReadingTheNoticeDoesNotLoadModules() async throws {
+        let bundle = StandardMIBBundle(bundle: .module)
+        _ = try await bundle.notice()
+        let loaded = await bundle.loadedModuleCount
+        XCTAssertEqual(loaded, 0, "Reading the notice read \(loaded) MIB modules.")
+    }
+
     // MARK: - Every bundled file is licence-recorded (C-9)
 
     func testEveryBundledFileIsListedInNOTICE() async throws {
@@ -172,8 +219,9 @@ final class StandardMIBBundleTests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// Walks up from this source file to the package root. Test-only: the NOTICE
-    /// file is a repository artefact, not a bundled resource.
+    /// Walks up from this source file to the package root, to reach the
+    /// repository copy of NOTICE. The shipped copy is a bundled resource — see
+    /// `testNoticeShipsInsideTheBundle` — and the two are compared below.
     static let repositoryRoot: URL = {
         URL(filePath: #filePath)  // Tests/MIBKitTests/StandardMIBBundleTests.swift
             .deletingLastPathComponent()
