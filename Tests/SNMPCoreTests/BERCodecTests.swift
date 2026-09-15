@@ -195,8 +195,80 @@ final class BERCodecTests: XCTestCase {
     }
 
     func testOversizedLengthFieldIsRejected() {
-        var reader = BERReader([0x04, 0x89] + [UInt8](repeating: 0xFF, count: 9))
+        // Starts at the length octet, not the tag: 0x89 declares nine length
+        // bytes. Fed the tag first, this read the short form and never reached
+        // the guard it names.
+        var reader = BERReader([0x89] + [UInt8](repeating: 0xFF, count: 9))
         XCTAssertThrowsError(try reader.readLength())
+    }
+
+    /// The `count == 8` boundary specifically. Eight 0xFF length octets sit
+    /// inside the `count <= 8` guard and used to wrap to -1.
+    func testEightByteLengthFieldIsRejected() {
+        var reader = BERReader([0x88] + [UInt8](repeating: 0xFF, count: 8))
+        XCTAssertThrowsError(try reader.readLength())
+    }
+
+    /// The same length reached the way an attacker reaches it: through a TLV.
+    func testEightByteLengthIsRejectedThroughReadTLV() {
+        var reader = BERReader([0x04, 0x88] + [UInt8](repeating: 0xFF, count: 8))
+        XCTAssertThrowsError(try reader.readTLV())
+        XCTAssertGreaterThanOrEqual(reader.offset, 0)
+    }
+
+    /// 0x80 followed by seven zeros is Int.min — the most hostile of the
+    /// eight-octet encodings, and the one that drives the cursor furthest back.
+    func testMostNegativeLengthIsRejected() {
+        var reader = BERReader([0x04, 0x88, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        XCTAssertThrowsError(try reader.readTLV())
+        XCTAssertGreaterThanOrEqual(reader.offset, 0)
+    }
+
+    /// No length field of any width may decode to a negative number.
+    func testReadLengthIsNeverNegative() {
+        let octets: [UInt8] = [0x00, 0x01, 0x7F, 0x80, 0xFE, 0xFF]
+        for count in 1...8 {
+            for filler in octets {
+                for leading in octets {
+                    var field: [UInt8] = [0x80 | UInt8(count), leading]
+                    field += [UInt8](repeating: filler, count: count - 1)
+                    var reader = BERReader(field)
+                    guard let length = try? reader.readLength() else { continue }
+                    XCTAssertGreaterThanOrEqual(
+                        length, 0, "length field \(field) decoded to \(length)")
+                }
+            }
+        }
+    }
+
+    /// Fuzz `readTLV` with attacker-shaped buffers: it must terminate, never
+    /// trap, and never move the cursor backwards.
+    func testReadTLVTerminatesAndNeverRewindsTheCursor() {
+        var rng = SplitMix64(seed: 0x5EED_5EED_5EED_5EED)
+        for _ in 0..<2_000 {
+            let size = Int(rng.next() % 24) + 2
+            var buffer = [UInt8]()
+            for index in 0..<size {
+                // Bias toward long-form length octets so the hostile paths are
+                // actually reached instead of drowned out by short forms.
+                buffer.append(index % 2 == 1 && rng.next() % 2 == 0
+                    ? 0x80 | UInt8(rng.next() % 12)
+                    : UInt8(rng.next() % 256))
+            }
+
+            var reader = BERReader(buffer)
+            var previous = reader.offset
+            var steps = 0
+            while !reader.isAtEnd {
+                guard (try? reader.readTLV()) != nil else { break }
+                XCTAssertGreaterThan(
+                    reader.offset, previous, "cursor did not advance over \(buffer)")
+                previous = reader.offset
+                steps += 1
+                XCTAssertLessThanOrEqual(steps, buffer.count, "did not terminate over \(buffer)")
+                if steps > buffer.count { break }
+            }
+        }
     }
 
     func testEmptyIntegerIsRejected() {
@@ -226,5 +298,20 @@ final class BERCodecTests: XCTestCase {
     func testReadingPastEndThrows() {
         var reader = BERReader([UInt8]())
         XCTAssertThrowsError(try reader.readByte())
+    }
+}
+
+/// Deterministic generator, so a fuzz failure is reproducible from the seed.
+private struct SplitMix64 {
+    private var state: UInt64
+
+    init(seed: UInt64) { self.state = seed }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 }
