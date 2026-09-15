@@ -17,7 +17,10 @@ let package = Package(
         // fully functional with no internet connectivity, so it cannot be fetched
         // on demand. `.copy` preserves the directory, which lets StandardMIBBundle
         // enumerate the set without reading any module (NFR-7).
-        .target(name: "MIBKit", resources: [.copy("Resources/StandardMIBs")]),
+        .target(
+            name: "MIBKit",
+            resources: [.copy("Resources/StandardMIBs"), .copy("Resources/NOTICE")]
+        ),
         .target(name: "AIBridge", dependencies: ["SNMPCore", "MIBKit"]),
         .executableTarget(name: "snmpcli", dependencies: ["SNMPCore", "MIBKit"]),
         .executableTarget(

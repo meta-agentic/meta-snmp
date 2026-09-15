@@ -23,10 +23,14 @@ public actor StandardMIBBundle {
     /// Filename extension of a bundled module.
     static let moduleExtension = "mib"
 
+    /// Filename of the bundled copyright notice.
+    static let noticeResource = "NOTICE"
+
     public enum Failure: Error, Equatable, CustomStringConvertible {
         case resourceDirectoryMissing
         case unknownModule(String)
         case unreadable(module: String, reason: String)
+        case noticeMissing
 
         public var description: String {
             switch self {
@@ -39,12 +43,19 @@ public actor StandardMIBBundle {
                 return "No bundled MIB module named '\(name)'."
             case .unreadable(let module, let reason):
                 return "Bundled MIB module '\(module)' could not be read: \(reason)"
+            case .noticeMissing:
+                return """
+                    The copyright notice is missing from the app bundle. This is a \
+                    packaging fault: the bundled MIB modules may only be redistributed \
+                    with their notice, so the product must not ship without it.
+                    """
             }
         }
     }
 
     private let bundle: Bundle
     private var cache: [String: String] = [:]
+    private var noticeCache: String?
 
     init(bundle: Bundle = .module) {
         self.bundle = bundle
@@ -70,6 +81,30 @@ public actor StandardMIBBundle {
             throw Failure.unreadable(module: module, reason: error.localizedDescription)
         }
         cache[module] = text
+        return text
+    }
+
+    /// The copyright notice covering every bundled module, read from the app
+    /// bundle rather than from the repository.
+    ///
+    /// Most of the bundled modules carry no copyright line of their own, so the
+    /// only grant they travel under is the RFC Full Copyright Statement, whose
+    /// single condition is that the notice is included on all copies. That makes
+    /// this file part of the product, not a repository artefact: a build that
+    /// cannot find it here is one that must not ship.
+    ///
+    /// Read lazily and cached, like a module. Nothing reads it until the
+    /// acknowledgements surface asks for it.
+    public func notice() throws -> String {
+        if let cached = noticeCache { return cached }
+        guard let url = bundle.url(forResource: Self.noticeResource, withExtension: nil) else {
+            throw Failure.noticeMissing
+        }
+        // Presence of the entry is not enough — it must have readable content.
+        guard let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty else {
+            throw Failure.noticeMissing
+        }
+        noticeCache = text
         return text
     }
 
