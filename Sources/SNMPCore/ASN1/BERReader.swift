@@ -60,20 +60,32 @@ public struct BERReader: Sendable {
             throw SNMPError.malformedMessage("indefinite length is not permitted in SNMP")
         }
         guard count <= 8 else { throw SNMPError.malformedMessage("length field too large") }
-        var value = 0
-        for _ in 0..<count { value = (value << 8) | Int(try readByte()) }
-        return value
+        // Accumulate unsigned: a BER length is unsigned, and eight octets with
+        // the top bit set do not fit a signed Int. Doing this in Int silently
+        // wrapped to a negative number, which callers then treated as a count.
+        var value: UInt64 = 0
+        for _ in 0..<count { value = (value << 8) | UInt64(try readByte()) }
+        guard value <= UInt64(Int.max) else {
+            throw SNMPError.malformedMessage("length field too large")
+        }
+        return Int(value)
     }
 
     /// Reads a TLV header and returns the tag plus a reader scoped to its content.
     public mutating func readTLV() throws -> (tag: UInt8, content: BERReader) {
         let tag = try readByte()
         let length = try readLength()
-        guard offset + length <= end else {
+        // `readLength` cannot return a negative value, but assert forward
+        // progress here anyway rather than inferring it: this cursor is driven
+        // by untrusted network data, and a backwards cursor is a parser-state
+        // primitive. Compared as `length <= remaining` so the check itself
+        // cannot overflow on a hostile length.
+        guard length >= 0, length <= end - offset else {
             throw SNMPError.malformedMessage("value length \(length) exceeds buffer")
         }
-        let scoped = BERReader(bytes: bytes, offset: offset, end: offset + length)
-        offset += length
+        let contentEnd = offset + length
+        let scoped = BERReader(bytes: bytes, offset: offset, end: contentEnd)
+        offset = contentEnd
         return (tag, scoped)
     }
 
