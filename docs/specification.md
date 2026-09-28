@@ -64,9 +64,8 @@ privacy-policy URLs all resolve under that domain.
 - **Live graphing** of numeric OIDs, with counter-to-rate derivation
 - Export of results and chart series
 
-v1.0 is therefore a **purely outbound, client-shaped** application. It needs only the
-outgoing-connection entitlement, which is the simplest sandbox and the cleanest App Review
-story the product can have.
+v1.0 is a **client-shaped** application: it initiates every exchange and serves nothing.
+Its sandbox entitlements are fixed by C-7, and its use of the local network by C-11.
 
 ### Deferred to v1.1
 
@@ -101,7 +100,7 @@ The store listing must not describe capabilities v1.0 lacks.
 - **FR-4** Authenticate v3 sessions with USM, supporting noAuthNoPriv, authNoPriv and authPriv.
 - **FR-5** Collect from multiple targets concurrently, up to a stated concurrency ceiling, without one target's failure affecting another.
 - **FR-6** Cancel any in-flight collection promptly, returning whatever was collected so far.
-- **FR-7** *(v1.1 — deferred)* Receive v1 traps, v2c traps and informs, and v3 traps, acknowledging informs. The v1 trap PDU is structurally different from v2c/v3 — enterprise OID, generic/specific trap numbers and agent-address, versus a varbind-carried `snmpTrapOID` — and is parsed on its own path, not folded into the v2 shape. Subject to C-8: the listener cannot bind UDP/162.
+- **FR-7** *(v1.1 — deferred)* Receive v1 traps, v2c traps and informs, and v3 traps, acknowledging informs. The v1 trap PDU is structurally different from v2c/v3 — enterprise OID, generic/specific trap numbers and agent-address, versus a varbind-carried `snmpTrapOID` — and is parsed on its own path, not folded into the v2 shape. Subject to C-8.
 - **FR-22** Apply a per-request timeout, a bounded retry count and a backoff policy, all configurable, with stated defaults. SNMP runs over UDP with no delivery guarantee; without this, every throughput and concurrency requirement is unachievable on a lossy link.
 - **FR-23** Tolerate agent misbehaviour without looping or corrupting results: a non-increasing or repeating OID during a walk terminates it with a diagnostic, an agent returning fewer varbinds than the requested max-repetitions is accommodated rather than treated as an error, and an agent that misreports its maximum message size is handled by backing off on response-too-large.
 - **FR-24** Reject a Counter64 request against a v1 target as structurally invalid, with an explanation. 64-bit counters do not exist in SMIv1 or the v1 protocol (RFC 2578 introduced them), so FR-18's rate derivation is defined for Counter64 only on v2c and v3 targets.
@@ -177,13 +176,17 @@ decision, taken on evidence from what users actually fail to import.
 - **C-4** The app has **no server component**. Nothing is proxied through infrastructure we operate, because we operate none.
 - **C-5** From v1.1, AI features are **bring-your-own-key**: the app ships no AI credentials.
 - **C-6** The app must be fully functional with no internet connectivity. SNMP is a LAN protocol; nothing in the core workflow may require reaching the public internet.
-- **C-7** **v1.0 requires the outgoing-connection entitlement only.** Trap reception is v1.1, so the inbound entitlement (`com.apple.security.network.server`) is *not* requested at launch. This is the narrowest sandbox the product can ship with and the simplest App Review story available to it — a client-shaped app asking only for client permissions. When traps arrive in v1.1, the inbound entitlement must be justified explicitly in the review notes, and C-8 applies.
-- **C-8** *(applies from v1.1)* **The app cannot listen on UDP/162.** Binding a port below 1024 requires privilege a sandboxed, user-launched App Store app has no way to obtain — there is no entitlement for it. This is not a design choice between binding low or degrading gracefully; unprivileged binding is the only reachable outcome. The consequences are real and must be disclosed rather than discovered:
-  - The receiver binds a **configurable unprivileged port**, default 1162.
-  - Many devices send traps to a hardcoded 162 and cannot be redirected by an operator who does not control every device. For those, the app cannot receive traps at all without an external forwarder. **FR-7's reach is therefore partial**, and §3 and the store listing must say so.
+- **C-7** **v1.0 requests both App Sandbox network entitlements**, `com.apple.security.network.client` and `com.apple.security.network.server`. For UDP the sandbox governs the flow of data as well as who initiates it: with the client entitlement alone an app can send a datagram but not receive the reply, so an SNMP request and its response on one socket need both ([Apple: network client entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.network.client)). The review notes state what each is for: the client entitlement for queries to user-configured targets, the server entitlement for their replies and, from v1.1, for traps (C-8). No other network entitlement is requested.
+- **C-8** *(applies from v1.1)* **The trap receiver prefers UDP/162 and falls back to a configurable port.** It binds the standard port on the wildcard address first; if that bind is refused, it binds a **configurable unprivileged port**, default 1162, and says which port it is listening on. The store listing describes trap reception in those terms. The consequences of the fallback are disclosed rather than discovered:
+  - Many devices send traps to a hardcoded 162 and cannot be redirected by an operator who does not control every device. When the receiver is on the fallback port, those devices cannot reach the app without an external forwarder, and **FR-7's reach is partial**. The app states this where the listening port is shown.
   - The first bind raises the macOS Application Firewall's "accept incoming connections" prompt. This is a system dialog appearing mid-task for a user under time pressure, and the app must prepare the user for it rather than let it arrive unexplained.
 - **C-9** The bundled standard MIBs (FR-8) must be redistributable under terms compatible with **paid** distribution. If a file is not redistributable it cannot ship, and the feature degrades. Each bundled file's licence is confirmed and recorded in a NOTICE file before it is bundled.
 - **C-10** The app is accessible and English-only at v1. Full keyboard navigation, VoiceOver labels on every control, and Dynamic Type support are requirements, not aspirations. Localisation is an explicit non-goal for v1 — recorded here so the omission is a decision rather than an oversight.
+- **C-11** **Local network access is a permission the user grants.** On macOS 15 and later, sending UDP to a device on the local network requires the user's consent, whichever networking API sends it ([TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy)). Therefore:
+  - The app declares `NSLocalNetworkUsageDescription` with a purpose string that names SNMP queries to the user's own devices.
+  - It asks for access at a moment the user expects — before the first query, with its own explanation first — never mid-investigation.
+  - Because the system does not report a denial for UDP, the app cannot tell "access denied" from "no answer". When every local target stops answering at once, it says that Local Network access may be off and where to turn it on, rather than presenting a network fault. Targets reached over a VPN are not local-network traffic and are unaffected.
+  - The behaviour is verified on the signed, sandboxed app. Command-line tools are exempt from the consent gate, so it cannot be verified from one.
 
 ---
 
@@ -259,3 +262,4 @@ incident, and support must not promise diagnosis from a crash report alone.
 | draft-3 | 2026-07-27 |
 | draft-4 | 2026-07-28 |
 | draft-5 | 2026-07-29 |
+| draft-6 | 2026-09-28 |
