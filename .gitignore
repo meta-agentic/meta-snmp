@@ -12,3 +12,8 @@ DerivedData/
 # Local secrets — never commit an API key or a community string
 *.env
 Secrets.plist
+
+# Local editor and agent-tooling state
+.idea/
+.claude/
+.claude-flow/
