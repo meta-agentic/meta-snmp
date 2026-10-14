@@ -18,12 +18,19 @@ previewable before they are sent.
 
 ## Stack
 
-Swift 6 · SwiftUI · SwiftPM · Network.framework · CryptoKit/CommonCrypto.
-No third-party runtime dependencies. macOS 14+.
+Swift 6 · SwiftUI · SwiftPM. No third-party runtime dependencies. macOS 14+.
+
+The protocol engine (`SNMPCore`, `MIBKit`, `snmpcli`) is committed to a **Foundation-only
+portable core**: no Apple-only framework below that line, so a headless Linux collector or
+CLI can share it later. Transport and USM cryptography sit behind protocols — a BSD-sockets
+transport and hand-written Swift crypto are the decided default implementations, not yet
+built (see the ADR's open items). The macOS app above the boundary uses SwiftUI, the
+Keychain and whatever else the platform offers. Why, and the rule a reviewer checks:
+[docs/adr/ADR-SNMP-01](docs/adr/ADR-SNMP-01-portability-boundary.md).
 
 | Target | Kind | Purpose |
 |--------|------|---------|
-| `SNMPCore` | library | BER/ASN.1 codec, message & PDU model, USM security, UDP transport, sessions |
+| `SNMPCore` | library | BER/ASN.1 codec, message & PDU model, USM security logic, sessions — defines the transport and crypto protocols; default implementations (BSD-sockets UDP, hand-written USM crypto) are decided but not yet built (ADR-01) |
 | `MIBKit` | library | SMIv2 parser, OID registration tree, value formatting, private-MIB I/O |
 | `AIBridge` | library | Provider-agnostic AI client and the tool-calling loop over local data |
 | `snmpcli` | executable | Headless driver for testing the engine against real agents |

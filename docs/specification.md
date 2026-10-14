@@ -84,7 +84,7 @@ The store listing must not describe capabilities v1.0 lacks.
 | Network discovery by scanning ranges | Ill-fitting for a sandboxed App Store app, and a poor App Review story |
 | Device configuration management | SET exists for single values under confirmation; this is not a provisioning tool |
 | SNMP agent (serving) functionality | A manager and a notification receiver, never an agent |
-| Cross-platform (iOS, Windows, Linux) | The app is macOS-native throughout; portability would cost that |
+| Cross-platform **applications** (iOS, Windows, a Linux GUI) | The v1.0 shippable product is the macOS app and nothing else ships from this repository at v1.0. The protocol engine beneath it is a different matter: it is kept free of Apple-only APIs (C-12) so that a **headless Linux/server-side collector or CLI** can share it later — a named future direction, not a v1.0 deliverable, decided in [ADR-01](adr/ADR-SNMP-01-portability-boundary.md). The macOS application itself stays macOS-native throughout |
 | Team features — sharing, sync, collaboration | No server component (§2), so there is nothing to sync through |
 | Localisation | English-only at v1 (C-10) |
 
@@ -187,6 +187,7 @@ decision, taken on evidence from what users actually fail to import.
   - It asks for access at a moment the user expects — before the first query, with its own explanation first — never mid-investigation.
   - Because the system does not report a denial for UDP, the app cannot tell "access denied" from "no answer". When every local target stops answering at once, it says that Local Network access may be off and where to turn it on, rather than presenting a network fault. Targets reached over a VPN are not local-network traffic and are unaffected.
   - The behaviour is verified on the signed, sandboxed app. Command-line tools are exempt from the consent gate, so it cannot be verified from one.
+- **C-12** **The protocol engine is a Foundation-only portable core.** Below the boundary, nothing imports an Apple-only framework; Apple frameworks enter only above it, in the application and its adapters. Under C-2 this means the USM cryptographic primitives are hand-written Swift, reviewed before merging. **[ADR-01](adr/ADR-SNMP-01-portability-boundary.md) is the single source of truth** for which modules may import what, the primitive inventory, and the mechanical check — this constraint states the principle and does not restate its detail, so the two cannot drift apart.
 
 ---
 
@@ -263,3 +264,4 @@ incident, and support must not promise diagnosis from a crash report alone.
 | draft-4 | 2026-07-28 |
 | draft-5 | 2026-07-29 |
 | draft-6 | 2026-09-28 |
+| draft-7 | 2026-10-14 |
