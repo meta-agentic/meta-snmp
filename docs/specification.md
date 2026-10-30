@@ -142,7 +142,7 @@ Full clause-level detail belongs to the engine specification (S2). This fixes th
 | RFC 3414 (USM) | Manager role: HMAC-MD5-96, HMAC-SHA-96, engine discovery, timeliness, CBC-DES |
 | RFC 7860 (SHA-2 for USM) | HMAC-SHA-224/256/384/512 |
 | RFC 3826 (AES for USM) | CFB128-AES-128 |
-| AES-192/256 (Blumenthal draft) | Implemented for vendor interop; **labelled non-standard in the UI** |
+| AES-192/256 (Blumenthal draft) | Implemented for vendor interop; **labelled non-standard in the UI**. Both key extensions in the wild — the draft's own and the Reeder ("Cisco") variant — selectable per user ([ADR-03](adr/ADR-SNMP-03-crypto.md)) |
 | RFC 2578–2580 (SMIv2) | Parsing to the depth needed for FR-8 to FR-11 |
 
 **Cryptographic labelling.** The UI flags AES-192/256 as *non-standard*, which is a
