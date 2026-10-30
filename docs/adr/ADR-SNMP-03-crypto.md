@@ -93,7 +93,7 @@ public enum USMKey<H: HashFunction> {
     /// draft-blumenthal-aes-usm-04 §3.1.2.1: Kul ← Kul ‖ H(Kul), repeated, truncated to `length`.
     public static func extendBlumenthal(_ kul: [UInt8], to length: Int) -> [UInt8]
     /// draft-reeder-snmpv3-usm-3desede-00 §2.1: Kn+1 = localize(passwordToKey(Kn), engineID), concatenated, truncated.
-    public static func extendReeder(_ kul: [UInt8], engineID: [UInt8], to length: Int) -> [UInt8]
+    public static func extendReeder(_ kul: [UInt8], engineID: [UInt8], to length: Int) throws(CryptoError) -> [UInt8]   // calls passwordToKey
 }
 
 public struct DES: Sendable {                       // FIPS 46-3; encrypt and decrypt
@@ -125,7 +125,8 @@ public enum ConstantTime {
 
 Two remarks the reviewer is entitled to rely on:
 
-- **Both key extensions coincide with "no extension" when the localised key is already long enough**, and with each other when one round suffices. The draft's own Reeder pseudo-code feeds Kₙ into the next round while net-snmp feeds the growing concatenation ([`keytools.c` L582–L633][ns-keytools-reeder]); with the hashes in scope, AES-256 needs at most **one** extension round (16→32, 20→32, 28→32), so the two readings never diverge. `extendReeder` follows the draft text and a test asserts the one-round bound, so a future longer key fails loudly rather than silently picking a side.
+- **Both key extensions coincide with "no extension" when the localised key is already long enough.** They never coincide with each other: Blumenthal appends a hash of the key, Reeder appends a fresh password-to-key-and-localise of it, and for the SHA-1 `maplesyrup` key below the first appended octets are `505e07eb…` and `9b8b6d78…` respectively. What does coincide when one round suffices is the two *readings of Reeder*: the draft's own pseudo-code feeds Kₙ into the next round while net-snmp feeds the growing concatenation ([`keytools.c` L582–L633][ns-keytools-reeder]); with the hashes in scope, AES-256 needs at most **one** extension round (16→32, 20→32, 28→32), so the two readings never diverge. `extendReeder` follows the draft text and a test asserts the one-round bound, so a future longer key fails loudly rather than silently picking a side.
+- **`extendReeder` throws** because it calls `passwordToKey`, which rejects inputs shorter than 8 octets. A localised key is always at least 16, so it never does in practice; the signature says so rather than hiding a `try!` in the primitive.
 - **No key zeroisation is promised.** Swift gives no portable guarantee that a buffer is wiped. Keys are short-lived values; this is part of the residual risk the reviewer rules on (§2.6).
 
 ### 2.3 `SNMPCore` — `AuthenticationProtocol`
@@ -134,14 +135,15 @@ Two remarks the reviewer is entitled to rely on:
 // Sources/SNMPCore/USM — imports Foundation, SNMPCrypto.
 
 /// A localised key: not Codable, description redacted (INV-1/INV-2). Same family as INV-1's credential type.
-public struct LocalizedKey: Sendable, CustomStringConvertible, CustomDebugStringConvertible { /* [UInt8], internal */ }
+/// Records, internally, the authentication protocol that localised it: the AES key extensions need its hash.
+public struct LocalizedKey: Sendable, CustomStringConvertible, CustomDebugStringConvertible { /* [UInt8] + HMACAuthentication, internal */ }
 
 public protocol AuthenticationProtocol: Sendable {
     var identifier: OID { get }      // usmHMACMD5AuthProtocol … usmHMAC384SHA512AuthProtocol
     var keyLength: Int { get }       // M
     var macLength: Int { get }       // N — the truncation length
 
-    /// RFC 3414 §2.6 + §A.2 (RFC 7860 §5 for SHA-2). `password` is INV-1's credential type.
+    /// RFC 3414 §2.6 + §A.2 (RFC 7860 §9.3 and §5 for SHA-2). `password` is INV-1's credential type.
     func localizedKey(password: borrowing Credential, engineID: [UInt8]) throws(SNMPError) -> LocalizedKey
 
     /// RFC 3414 §6.3.1, §7.3.1 / RFC 7860 §4.2.1: HMAC over the whole message with the N-octet
@@ -154,7 +156,7 @@ public protocol AuthenticationProtocol: Sendable {
 }
 ```
 
-The default conformer is one value type, `HMACAuthentication`, with six static instances. Its numbers are fixed here, from RFC 3414 §6–7 and RFC 7860 §4.1–4.2:
+The default conformer is one value type, `HMACAuthentication`, with six static instances. `OID`'s public initialisers throw, so the instances are built with a non-throwing internal initialiser for validated constant arcs, never with `try!`. Its numbers are fixed here, from RFC 3414 §6–7 and RFC 7860 §4.1–4.2:
 
 | Instance | Hash | M — key octets | N — MAC octets (truncation) | Identifier |
 |---|---|---|---|---|
@@ -164,6 +166,8 @@ The default conformer is one value type, `HMACAuthentication`, with six static i
 | `.sha256` | SHA-256 | 32 | 24 | 1.3.6.1.6.3.10.1.1.5 |
 | `.sha384` | SHA-384 | 48 | 32 | 1.3.6.1.6.3.10.1.1.6 |
 | `.sha512` | SHA-512 | 64 | 48 | 1.3.6.1.6.3.10.1.1.7 |
+
+**`SNMPError` gains** the cases this section and §2.4 throw, carrying lengths, never bytes (INV-2): `authenticationError` (received MAC length ≠ N), `authenticationFailure` (MAC mismatch), `encryptionError`, `decryptionError`, `passwordTooShort(minimum: Int)` and `localizedKeyTooShort(needed: Int, actual: Int)`. `CryptoError` maps onto them in `SNMPCore`; `CryptoError` itself never appears in `SNMPCore`'s public API.
 
 The verify path is the only caller of `ConstantTime.equals`. **Authentication is checked before decryption** (RFC 3414 §3.2 step 6 before step 8), so no decryption output — padding included — is ever observable for a message that failed its MAC: there is no padding oracle to defend against.
 
@@ -176,8 +180,9 @@ public protocol PrivacyProtocol: Sendable {
     var identifier: OID { get }
     var privacyParametersLength: Int { get }   // 8 for every protocol here
 
-    /// Derives the cipher key (and DES pre-IV) from the user's localised key.
-    /// Throws .localizedKeyTooShort if the auth protocol cannot supply enough material and no extension applies.
+    /// Derives the cipher key (and DES pre-IV) from the user's localised key; an AES-192/256 extension
+    /// uses the hash of the authentication protocol `kul` records (§2.3).
+    /// Throws SNMPError.localizedKeyTooShort if the auth protocol cannot supply enough material and no extension applies.
     func privacyKey(from kul: LocalizedKey, engineID: [UInt8]) throws(SNMPError) -> PrivacyKey
 
     /// `salt` is the 64-bit privParameters value, composed by the session's SaltSource (below).
@@ -199,7 +204,7 @@ The default conformers, with the key, IV and salt handling fixed here:
 | `AESPrivacy(.aes128)` — usmAesCfb128Protocol, RFC 3826 | first 16 octets of Kul | authoritative `snmpEngineBoots` ‖ `snmpEngineTime` ‖ salt, each MSB first — §3.1.2.1 | 64-bit counter, MSB first | none (CFB is a stream mode) |
 | `AESPrivacy(.aes192, extension:)` / `(.aes256, extension:)` — non-standard | first 24 / 32 octets of Kul, **extended per §2.5 only if Kul is shorter** | as AES-128 | as AES-128 | none |
 
-**Salt.** `SaltSource`, in `SNMPCore`, owns two counters per local engine: a 32-bit one for DES and a 64-bit one for AES, each initialised from `SystemRandomNumberGenerator` at start-up and incremented by one per encrypted message, wrapping. This follows RFC 3414 §8.1.1.1 and RFC 3826 §3.1.2.1 (the latter says *pseudo-random at boot*; ADR-01 §4's "seeded from `snmpEngineBoots`" is accurate only for DES's first four octets, and this record is the precise statement). The counter is atomic: two concurrent sessions never draw the same value. The salt is an **input** to `encrypt` so every privacy test, interop replay included, is deterministic.
+**Salt.** `SaltSource`, in `SNMPCore`, owns two counters per local engine: a 32-bit one for DES and a 64-bit one for AES, each initialised from `SystemRandomNumberGenerator` at start-up and incremented by one per encrypted message, wrapping. This follows RFC 3414 §8.1.1.1 and RFC 3826 §3.1.2.1 (the latter says *pseudo-random at boot*; ADR-01 §4's "seeded from `snmpEngineBoots`" is accurate only for DES's first four octets, and this record is the precise statement). The counter is atomic: two concurrent sessions never draw the same value. Under C-1 that means a `final class SaltSource: @unchecked Sendable` whose counters are private and read and written only under an `NSLock` — `Synchronization.Atomic` and `Mutex` need macOS 15, the same reason ADR-SNMP-02 §3.3 gives — and the Linux lane's ThreadSanitizer run covers it. The salt is an **input** to `encrypt` so every privacy test, interop replay included, is deterministic.
 
 ### 2.5 AES-192/256 key extension (settles ADR-01 §8 item 2)
 
@@ -232,7 +237,7 @@ The setting only matters when Kul is shorter than the AES key: MD5 or SHA-1 with
 
 ### 2.7 Test policy per primitive (ADR-01 §4 rows)
 
-Every row has known-answer tests (KAT). Differential tests run on Apple platforms only, in `SNMPCryptoTests`, behind `#if canImport(CryptoKit)` / `#if canImport(CommonCrypto)` per ADR-01 §3.2, over seeded random inputs (the seed is printed on failure so the case is reproducible). Vector files are committed under `Tests/SNMPCryptoTests/Vectors/` with their source URL and retrieval date in a header line.
+Every row has known-answer tests (KAT). Differential tests run on Apple platforms only, in `SNMPCryptoTests`, behind `#if canImport(CryptoKit)` / `#if canImport(CommonCrypto)` per ADR-01 §3.2, over seeded random inputs (the seed is printed on failure so the case is reproducible). `CryptoKit` also declares `HashFunction`, `HMAC`, `SHA256`, `SHA384` and `SHA512`, so in a file importing both modules every such name is written module-qualified (`SNMPCrypto.HMAC`, `CryptoKit.HMAC`). Vector files are committed under `Tests/SNMPCryptoTests/Vectors/` with their source URL and retrieval date in a header line.
 
 | Row | Primitive | Known-answer vectors | Differential oracle |
 |---|---|---|---|
@@ -249,6 +254,28 @@ Every row has known-answer tests (KAT). Differential tests run on Apple platform
 **Interop captures** are the end-to-end check for rows 5–8 and the only external one for row 8. Each fixture is a recorded request/response pair (UDP payload only — no addresses, no pcap headers), from a lab agent configured with **throwaway** test users, together with the engine ID, boots, time, salt and the test passwords needed to replay it offline. They live under `Tests/SNMPCoreTests/Fixtures/Interop/<agent>/` with a provenance line per file: agent software and version, configuration line used, date. They cover, per agent, every auth × priv combination that agent offers. Replays run with no network (NFR-9). Fixtures are public-repo material: no production engine IDs, credentials or addresses.
 
 **Merge gate, restated:** a primitive merges with its KATs green, its differential tests green where an oracle exists, its interop fixtures where §2.7 names them, and a crypto review per §2.6 — all four, or it does not merge.
+
+### 2.8 Validation (Linux, Swift 6.4.2)
+
+**Interfaces.** Every declaration in §2.2–§2.4 was transcribed into a throwaway package outside this repository — `SNMPCrypto` with no `import` at all, `SNMPCore` importing `Foundation` and `SNMPCrypto` — and built on Ubuntu 24.04 with the official Swift 6.4.2 toolchain, Swift 6 language mode, `-strict-concurrency=complete` and warnings as errors. ADR-01's `check Sources/SNMPCrypto` printed nothing. MD5, SHA-1, HMAC, `USMKey` and `ConstantTime` were given working bodies, and `HMACAuthentication`, `AESPrivacy` and `SaltSource` minimal ones. What did not compile or could not be completed as written, each corrected above: `extendReeder` calling the throwing `passwordToKey` without `throws` ("errors thrown from here are not handled"); `privacyKey(from:engineID:)` with no way to know the user's auth hash, which both extensions need; `SNMPError` cases thrown but never declared (`authenticationError`, `authenticationFailure`, `decryptionError`, and `localizedKeyTooShort`, which existed only on `CryptoError`, a type a `throws(SNMPError)` function cannot throw). With the corrections, Swift tests reproduce the RFC 3414 §A.3 keys, the RFC 2202 96-bit truncations, both drafts' extension vectors through `USMKey`, and the same vectors through `AESPrivacy(.aes256, extension:)`'s `privacyKey` for MD5 (Reeder) and SHA-1 (Blumenthal) users.
+
+**Known answers**, reproduced in Python from this record's rules with `hashlib`/`hmac` and the `cryptography` package's block ciphers, no SNMP helper:
+
+| Vector | Result |
+|---|---|
+| RFC 3414 §A.3.1 MD5 `Ku`, `Kul`; §A.3.2 SHA-1 `Ku`, `Kul`; password < 8 octets rejected | pass |
+| RFC 2202 HMAC-MD5 cases 1–7, HMAC-SHA-1 cases 1–7, both 96-bit truncations (case 5) | pass |
+| RFC 4231 cases 1–7 × SHA-224/256/384/512, including the 128-bit truncation of case 5 | pass |
+| §2.3's M/N table against RFC 3414 (12) and RFC 7860 §4.1 (16, 24, 32, 48) | pass |
+| DES: SP 800-17 variable-plaintext round 0; FIPS 81 CBC example; §2.4's key/pre-IV/salt/IV rule against a hand-built CBC chain; parity bits ignored | pass |
+| AES: SP 800-38A F.3.13/F.3.15/F.3.17 CFB128 (first block); RFC 3826 §3.1.2.1 IV layout; CFB partial final block | pass |
+| draft-blumenthal-aes-usm-04 A.1 (SHA-1 → 256 bits) | pass |
+| draft-reeder-snmpv3-usm-3desede-00 B.1 (MD5 → 32), B.2 (SHA-1 → 40) | pass |
+| §2.2's earlier claim that the two extensions coincide after one round | **fail** — corrected in §2.2 |
+
+The RFC 2202 text repeats lines of SHA-1 case 5 inside case 7 (a stray `digest`/`digest-96` pair); case 7 passes against its first, correct digest. No rule in §2.2–§2.5 disagrees with RFC 3414 §8.1.1, RFC 3826 §3.1.2.1 or RFC 7860 §4.
+
+**Not checked here**, because it needs Apple platforms: a macOS 14 build, including the availability of typed throws in protocol requirements on that runtime; the differential tests against CryptoKit and CommonCrypto (§2.7) and the name collision noted there; and the release-build disassembly inspection of `ConstantTime.equals` on arm64.
 
 ## 3. Options rejected
 
@@ -295,6 +322,7 @@ Superseded, never edited, when any of these is observed:
 3. **Confirm net-snmp's pairing on a running build.** Test: snmpd built with `--enable-blumenthal-aes`; users with `AES256` and `AES256C` and SHA-1 auth; captures decrypt with Blumenthal and Reeder respectively. The source reading in §2.5 predicts this; the capture proves it.
 4. **SHA-2 key-localisation vectors.** RFC 7860 publishes none. Derive them from the net-snmp build in item 3 (its key-derivation output for `maplesyrup` and engine ID `00…02`, SHA-224…512) and commit them with that provenance; until then row 5's SHA-2 cases rest on the differential test alone.
 5. **The model line** in `docs/review/crypto-reviewer.md` — pinned by the product owner.
+6. **INV-1's credential type.** §2.3 fixes `localizedKey(password: borrowing Credential, …)` while §4 leaves the type undecided; the signature compiles with a `~Copyable, Sendable` stand-in, and `borrowing` is only meaningful if the type is noncopyable. Whether it is, and its name, is the INV-1 record's decision, which this protocol waits on.
 
 ---
 
