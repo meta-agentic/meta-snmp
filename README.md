@@ -26,7 +26,9 @@ CLI can share it later. Transport and USM cryptography sit behind protocols — 
 transport and hand-written Swift crypto are the decided default implementations, not yet
 built (see the ADR's open items). The macOS app above the boundary uses SwiftUI, the
 Keychain and whatever else the platform offers. Why, and the rule a reviewer checks:
-[docs/adr/ADR-SNMP-01](docs/adr/ADR-SNMP-01-portability-boundary.md).
+[docs/adr/ADR-SNMP-01](docs/adr/ADR-SNMP-01-portability-boundary.md). The transport's
+API, and why the sandboxed app uses the same BSD-sockets transport (proposed):
+[docs/adr/ADR-SNMP-02](docs/adr/ADR-SNMP-02-transport.md).
 
 | Target | Kind | Purpose |
 |--------|------|---------|
