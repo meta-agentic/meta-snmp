@@ -44,8 +44,14 @@ public struct SNMPAddress: Sendable, Hashable, CustomStringConvertible {
         case ipv4(IPv4)
         case ipv6(IPv6, zone: IPv6Zone?)
     }
-    public struct IPv4: Sendable, Hashable { public let bits: UInt32 }               // host byte order
-    public struct IPv6: Sendable, Hashable { public let high: UInt64, low: UInt64 }  // host byte order
+    public struct IPv4: Sendable, Hashable {                                         // host byte order
+        public let bits: UInt32
+        public init(bits: UInt32)
+    }
+    public struct IPv6: Sendable, Hashable {                                         // host byte order
+        public let high: UInt64, low: UInt64
+        public init(high: UInt64, low: UInt64)
+    }
     public enum IPv6Zone: Sendable, Hashable {
         case name(String)    // "en0" — as the user typed it
         case index(UInt32)   // "4"   — numeric form, or as received
@@ -66,6 +72,8 @@ public struct SNMPAddress: Sendable, Hashable, CustomStringConvertible {
 - **The core never resolves a zone.** `if_nametoindex` is a C-library call and belongs to the POSIX transport, which resolves `.name` at every send (an interface index can change when an interface is re-created). `.index` passes through. On receive, the transport reports `sin6_scope_id` as `.name` when `if_indextoname` succeeds and `.index` otherwise.
 - **Addresses are numeric.** Name resolution (INV-3(b)) is not part of `SNMPTransport`; a host name is resolved before an `SNMPAddress` exists. Who resolves, and how, is §8 item 4.
 - Text parsing is hand-written in the core: `inet_pton` is a C-library call and forbidden there.
+- **Every public value type in this record declares a public memberwise initialiser** (`IPv4`, `IPv6`, `InboundDatagram`, `InboundResponse`, `RetryPolicy`). Swift synthesises an *internal* one only, so without it the POSIX transport, the fake and the app — all other modules — cannot construct the values they must produce.
+- **Equality is on the zone as spelt.** A datagram sent to `fe80::1%4` comes back with source `fe80::1%en0` when index 4 is `en0`, and the two values are not `==`. Matching never compares addresses (§3.4); code that needs endpoint identity resolves the zone first.
 
 ### 3.3 The protocol
 
@@ -91,6 +99,7 @@ public protocol SNMPTransport: Sendable {
 public struct InboundDatagram: Sendable {
     public let bytes: [UInt8]
     public let source: SNMPAddress
+    public init(bytes: [UInt8], source: SNMPAddress)
 }
 
 public enum SNMPTransportError: Error, Sendable, Equatable {
@@ -104,7 +113,7 @@ public enum SNMPTransportError: Error, Sendable, Equatable {
 }
 ```
 
-The errors are untyped `throws` with the thrown set stated and asserted by the conformance suite (§3.5), because a typed `throws(SNMPTransportError)` cannot also carry `CancellationError`, and cancellation must surface the standard way for structured concurrency to compose. Codes are reported, never interpreted, by the core: `errno` values differ between Darwin and Linux. `SNMPError` gains `case transport(SNMPTransportError)`, `case timedOut(attempts: Int)` and `case invalidAddress(String)`.
+The errors are untyped `throws` with the thrown set stated and asserted by the conformance suite (§3.5), because a typed `throws(SNMPTransportError)` cannot also carry `CancellationError`, and cancellation must surface the standard way for structured concurrency to compose. Codes are reported, never interpreted, by the core: `errno` values differ between Darwin and Linux. `SNMPError` gains `case transport(SNMPTransportError)`, `case timedOut(attempts: Int)`, `case invalidAddress(String)` and, for §3.4, `case invalidRetryPolicy(String)`.
 
 **Contract details an implementation must honour:**
 
@@ -113,9 +122,11 @@ The errors are untyped `throws` with the thrown set stated and asserted by the c
 | **Datagram size** | `send` of more than `maximumDatagramSize` bytes throws `.datagramTooLarge` without touching the network. Receive buffers are `maximumDatagramSize + 1` bytes; a datagram that does not fit (POSIX: `MSG_TRUNC` set in `recvmsg`'s `msg_flags`) is **discarded, never delivered truncated**. Every conformance must accept at least 484 octets (RFC 3417 §3). The engine advertises `maximumDatagramSize` as its v3 `msgMaxSize`; FR-23's back-off on `tooBig` is the dispatcher's, not the transport's. |
 | **Transient send failure** | `EAGAIN`/`EWOULDBLOCK`/`ENOBUFS` are UDP loss: `send` returns normally and the datagram is dropped; the request's timeout and retry recover it. Every other `sendto` failure throws `.sendFailed`. |
 | **Inbound buffering** | Bounded at 1,024 datagrams per transport; beyond that the newest is dropped, as a kernel socket buffer does. Unread datagrams survive a cancelled `receive`. |
-| **Cancellation of `receive`** | If the calling task is cancelled, `receive` throws `CancellationError` promptly — it does not wait for the next datagram. |
+| **Cancellation of `receive`** | If the calling task is cancelled, `receive` throws `CancellationError` promptly — it does not wait for the next datagram. That includes a task cancelled **before** `receive` parks: `withTaskCancellationHandler` runs its handler at once when the task is already cancelled, before any continuation is stored, so the implementation checks `Task.isCancelled` under its lock immediately before parking. Without that check `receive` never returns. |
 | **Sockets** (POSIX) | One **unconnected** socket per address family, created on first use, bound to the wildcard address on an ephemeral port, shared by every target. `sendto`/`recvmsg`, never `connect`: an agent on a multihomed device may answer from an address other than the one asked, and a connected socket discards that answer in the kernel, where no diagnostic sees it. IPv6 sockets set `IPV6_V6ONLY`; dual-stack mapping is not used. |
 | **Threads** (POSIX) | Sockets are non-blocking. One dedicated `Foundation.Thread` per transport blocks in `poll` on the sockets and a self-pipe; received datagrams go into the bounded buffer, and `receive` awaits it through a continuation. `close` writes the self-pipe. Nothing blocks the cooperative thread pool. The class is `final … : @unchecked Sendable`, its state guarded by `NSLock` (`Synchronization.Mutex` needs macOS 15; C-1 is macOS 14). |
+| **`@unchecked Sendable`** | The compiler does not check these types, so the rule is stated: every stored `var` is `private`, read **and** written only under the type's lock, and no `public private(set) var` is used (its getter would bypass the lock). Applies to the POSIX transport, `FakeTransport` and `TestClock`. The Linux lane runs the suite with `swift test --sanitize=thread`. |
+| **Import check** | `check Sources/SNMPTransportPOSIX Foundation SNMPCore Darwin Glibc Musl`, and each of the three C libraries is imported only inside the one `#if canImport(Darwin) … #elseif canImport(Glibc) … #elseif canImport(Musl)` chain (ADR-SNMP-01 §3.2 left this carve-out to this record). `check Sources/SNMPTestSupport Foundation SNMPCore`. |
 | **Logging** | None. A transport sees credentials in v1/v2c community strings; INV-2 is simpler kept than audited. |
 
 ### 3.4 Requests: matching, timeout, retry, cancellation (in `SNMPCore`, above the transport)
@@ -127,26 +138,49 @@ public actor SNMPDispatcher {
     /// Throws `SNMPError.timedOut(attempts:)`, `SNMPError.transport(_)`, or `CancellationError`.
     public func exchange(_ request: OutboundRequest, to target: SNMPAddress,
                          policy: RetryPolicy) async throws -> InboundResponse
+    /// Stops the reader task, closes the transport, fails every exchange in flight with
+    /// `SNMPError.transport(.closed)`. Idempotent; later `exchange` calls throw the same.
+    public func shutdown() async
+}
+
+public struct OutboundRequest: Sendable {
+    public enum Version: Sendable, Hashable { case v1, v2c, v3 }
+    public let version: Version
+    /// Encodes the whole message for one attempt. `requestID` is fixed for the request;
+    /// `msgID` is fresh per attempt and ignored for v1/v2c. For v3 this re-runs USM
+    /// (the MAC covers `msgID`), which is why a request cannot be a byte array.
+    public let encode: @Sendable (_ requestID: Int32, _ msgID: Int32) throws -> [UInt8]
+    public init(version: Version, encode: @escaping @Sendable (Int32, Int32) throws -> [UInt8])
+}
+
+public struct InboundResponse: Sendable {
+    public let bytes: [UInt8]       // the whole message, undecoded beyond the matching id
+    public let source: SNMPAddress
+    public init(bytes: [UInt8], source: SNMPAddress)
 }
 
 public struct RetryPolicy: Sendable, Hashable {
-    public var timeout: Duration        // per attempt
-    public var retries: Int             // attempts = retries + 1
-    public var backoffFactor: Double    // timeout × factor after each attempt
-    public var maximumTimeout: Duration // cap on the grown timeout
+    public let timeout: Duration        // per attempt
+    public let retries: Int             // attempts = retries + 1
+    public let backoffFactor: Double    // timeout × factor after each attempt
+    public let maximumTimeout: Duration // cap on the grown timeout
+    /// Throws `SNMPError.invalidRetryPolicy` unless 0 < timeout ≤ maximumTimeout, retries ≥ 0,
+    /// and backoffFactor is finite and within the bounds FR-22 states (§8 item 3).
+    public init(timeout: Duration, retries: Int, backoffFactor: Double, maximumTimeout: Duration) throws
 }
 ```
 
-- **Matching key.** `request-id` (v1/v2c) or `msgID` (v3), drawn from `SystemRandomNumberGenerator` in `1 ... Int32.max` (some agents mishandle negative `request-id`s) and unique among requests in flight on that dispatcher. A retry keeps its `request-id`; a v3 retry takes a **new** `msgID`, and every `msgID` a request has used stays registered until it completes, so a late answer to attempt 1 still completes it. The response's source address is **not** part of the key, for the multihomed reason above; it is returned in `InboundResponse.source` so the UI can show it.
-- **The reader.** The dispatcher runs one task looping on `transport.receive()`. It decodes only the header; a datagram that will not decode, or whose id matches nothing in flight (late, duplicated, foreign), is discarded and counted. What happens to a datagram that matches but fails v3 authentication is the USM record's to decide under INV-4, not this one's.
+- **Matching key.** `request-id` (v1/v2c, the first field of the PDU, after the community) or `msgID` (v3, the first field of `msgGlobalData`), drawn from `SystemRandomNumberGenerator` in `1 ... Int32.max` (some agents mishandle negative `request-id`s) and unique among requests in flight on that dispatcher. A retry keeps its `request-id`; a v3 retry takes a **new** `msgID`, and every `msgID` a request has used stays registered until it completes, so a late answer to attempt 1 still completes it. The response's source address is **not** part of the key, for the multihomed reason above; it is returned in `InboundResponse.source` so the UI can show it.
+- **The reader.** The dispatcher runs one task looping on `transport.receive()`, started by the first `exchange` and ended only by `shutdown()`: the task retains the dispatcher and stays parked in `receive` until the transport is closed, so releasing the last reference does not stop it. If `receive` throws a fatal `SNMPTransportError`, every exchange in flight and every later one fails with `SNMPError.transport(_)` of that error. It decodes only as far as the matching id; a datagram that will not decode, or whose id matches nothing in flight (late, duplicated, foreign), is discarded and counted. What happens to a datagram that matches but fails v3 authentication is the USM record's to decide under INV-4, not this one's.
 - **Timeout.** Per attempt, measured on the injected `Clock`: the attempt races `clock.sleep(for: timeout)` against its response in a task group. After the last attempt, `exchange` throws `SNMPError.timedOut(attempts:)`. Timeouts are never a transport error.
 - **Cancellation.** Cancelling the task that called `exchange` makes it throw `CancellationError` at once — mid-sleep or mid-send — and unregisters its ids, so a late response is discarded as unmatched. Cancellation is per request; the reader task and the transport keep running for other requests. FR-6's "return what was collected so far" is the walk's job: it catches `CancellationError` and returns its partial result.
 - **Send failure.** `.sendFailed` on any attempt fails the request at once with `SNMPError.transport(_)` — retrying in milliseconds does not repair an unreachable network.
+- **Timeout growth** is `min(timeout × backoffFactor, maximumTimeout)`, evaluated so it cannot overflow: `Duration * Double` traps ("Double value cannot be converted to _Int128") on a non-finite or very large product, which is why the policy is validated at construction and its fields are `let`. `SNMPError` gains `case invalidRetryPolicy(String)`.
 - **Defaults** for `RetryPolicy` are FR-22's to state in the specification; §8 item 3 proposes values.
 
 ### 3.5 The fake transport — NFR-9 on the same protocol
 
-The no-network suite substitutes a fake for the POSIX transport; it is a full `SNMPTransport`, not a mock of the dispatcher, so every dispatcher behaviour above is tested against the same contract the POSIX transport honours. It opens no socket, so it passes under CI's `(deny network*)` profile. Timing comes from the same test clock the dispatcher is given, so a five-retry timeout runs in microseconds, not seconds — which is how a suite with timeout tests stays inside 60 s. It lives in a proposed test-support target, `SNMPTestSupport` (`Foundation`, `SNMPCore`), below the boundary and never linked into the app.
+The no-network suite substitutes a fake for the POSIX transport; it is a full `SNMPTransport`, not a mock of the dispatcher, so every dispatcher behaviour above is tested against the same contract the POSIX transport honours. It opens no socket, so it passes under CI's `(deny network*)` profile. Timing comes from the same test clock the dispatcher is given, so a five-retry timeout runs in microseconds, not seconds — which is how a suite with timeout tests stays inside 60 s. It lives in a proposed test-support target, `SNMPTestSupport` (`Foundation`, `SNMPCore`), below the boundary and never linked into the app, together with `TestClock`: a manual `Clock` whose `Duration` is `Swift.Duration`, with `advance(by:)`, a way for a test to wait until a sleeper is parked, and `schedule(after:_:)`, which runs an action synchronously inside the `advance` that reaches its deadline.
 
 ```swift
 public final class FakeTransport: SNMPTransport, @unchecked Sendable {
@@ -164,25 +198,46 @@ public final class FakeTransport: SNMPTransport, @unchecked Sendable {
     private var queue: [InboundDatagram] = []        // bounded at 1_024, as §3.3
     private var waiter: CheckedContinuation<InboundDatagram, Error>?
     private var isClosed = false
-    public private(set) var sent: [(bytes: [UInt8], to: SNMPAddress)] = []
+    private var _sent: [(bytes: [UInt8], to: SNMPAddress)] = []
+    public var sent: [(bytes: [UInt8], to: SNMPAddress)] { lock.withLock { _sent } }   // read under the lock
 
     public init(clock: TestClock, agent: @escaping Agent) // TestClock: a manual Clock in the same target
 
     public func send(_ d: [UInt8], to dst: SNMPAddress) async throws {
         // closed → .closed; d.count > maximumDatagramSize → .datagramTooLarge;
         // record in `sent`; for each Reply: .fail throws, .drop does nothing,
-        // .answer enqueues at clock.now + after (deliver() resumes `waiter` or appends to `queue`).
+        // .answer with after == .zero delivers now; otherwise clock.schedule(after:) delivers it
+        // inside the advance that reaches it (deliver() resumes `waiter` or appends to `queue`).
+        // Not an unstructured Task sleeping on the clock: delivery order would then race the
+        // test's advance(by:), and Swift 6.4 warns that such a task's thrown errors are ignored.
     }
     public func receive() async throws -> InboundDatagram {
-        // withTaskCancellationHandler: pop `queue` if non-empty; a second waiter →
-        // .concurrentReceive; closed → .closed; otherwise park in `waiter`.
+        // withTaskCancellationHandler: under the lock, pop `queue` if non-empty; a second
+        // waiter → .concurrentReceive; closed → .closed; Task.isCancelled → CancellationError
+        // (see §3.3, cancellation before parking); otherwise park in `waiter`.
         // onCancel: resume `waiter` with CancellationError; the queue is untouched.
     }
     public func close() async { /* isClosed = true; resume `waiter` with .closed */ }
 }
 ```
 
-A shared **conformance suite** (`SNMPTransportConformance`) states §3.3's contract once as tests — size limit, discard of oversize input, cancellation of a pending `receive`, `close` waking `receive`, `.concurrentReceive`, the thrown-error set — and runs against `FakeTransport` in the NFR-9 lane and against `SNMPTransportPOSIX` on loopback in a **separate** CI step outside the deny-network profile, since loopback is network to that profile. The dispatcher's own tests (matching, late and duplicate answers, an answer from a different source, a v3 retry's new `msgID`, timeout after N attempts, cancellation mid-retry) run on the fake only.
+A shared **conformance suite** (`SNMPTransportConformance`) states §3.3's contract once as tests (generic over a transport factory, and in a test target, since `SNMPTestSupport` imports no test framework) — size limit, discard of oversize input, cancellation of a pending `receive` and of one cancelled before it parks, `close` waking `receive`, `.concurrentReceive`, the thrown-error set — and runs against `FakeTransport` in the NFR-9 lane and against `SNMPTransportPOSIX` on loopback in a **separate** CI step outside the deny-network profile, since loopback is network to that profile. The dispatcher's own tests (matching, late and duplicate answers, an answer from a different source, a v3 retry's new `msgID`, timeout after N attempts, cancellation mid-retry) run on the fake only.
+
+### 3.6 Validation (Linux, Swift 6.4.2)
+
+Every type and signature in §3.2–§3.5 was transcribed into a throwaway package outside this repository — `SNMPCore` (Foundation only), `SNMPTransportPOSIX` (Glibc behind `#if canImport`), `SNMPTestSupport` — and built on Ubuntu 24.04 with the official Swift 6.4.2 toolchain, Swift 6 language mode, `-strict-concurrency=complete` and warnings as errors. Stub bodies were written for the protocol, a working dispatcher, a working POSIX transport (unconnected non-blocking sockets, a `Thread` in `poll` with a self-pipe, `recvmsg` with `MSG_TRUNC`), the fake and a manual clock. Tests run against them, all passing after the corrections above:
+
+- the dispatcher matches a response through the fake, including an answer from another source and a foreign datagram discarded first;
+- timeout after three attempts (1 s, 2 s, 4 s on the test clock) in milliseconds of wall time; a v2c retry keeps its `request-id`; a v3 retry takes a new `msgID`, and a late answer to attempt 1 completes the request during attempt 2;
+- cancellation mid-wait throws `CancellationError` at once, and the answer arriving afterwards is counted as discarded; a send failure fails the request on its first attempt;
+- one receiver at a time (`.concurrentReceive`), `close` waking `receive`, unread datagrams surviving a cancelled `receive`, on the fake and on the POSIX transport over IPv4 loopback;
+- `fe80::1%lo` resolves to `sin6_scope_id == if_nametoindex("lo")` and parses back to the same value; the hand-written parser agrees byte for byte with `inet_pton` on seven IPv4/IPv6 forms; an unknown zone throws `.unknownZone`;
+- an oversize `send` throws `.datagramTooLarge` without touching the network, and an inbound datagram larger than the buffer is discarded, not delivered truncated;
+- the whole suite runs clean under ThreadSanitizer.
+
+What the transcription found, each corrected above: no public initialiser on `InboundDatagram`, `IPv4`, `IPv6` or `RetryPolicy` (cross-module construction does not compile); `OutboundRequest` and `InboundResponse` used but not defined; no way to stop the reader task; an unvalidated `RetryPolicy` that can trap; the fake's `sent` getter racing its `send` (ThreadSanitizer: "Swift access race"); a `receive` cancelled before it parks hanging forever (reproduced); delayed answers with no deterministic delivery mechanism; and the POSIX import check printing `Darwin`, `Glibc` and `Musl` with no carve-out stated.
+
+Not checked here, because it needs Apple platforms or a network this host lacks: everything in §4.3; a macOS 14 build (availability of `any Clock<Duration>` and of the `Thread`/`NSLock` pattern is expected but unverified); the `Darwin` branch of the POSIX transport; and IPv6 sockets, since the validation host had no IPv6 stack (`socket(AF_INET6)` failed and was reported as `.addressFamilyUnavailable(ipv6: true)`), so IPv6 loopback, `IPV6_V6ONLY` and receive-side zone reporting on a live link-local address remain to be run.
 
 ## 4. Decision — open item 4: POSIX in the sandboxed app
 
@@ -264,7 +319,8 @@ Recorded here so they are not mistaken for decided:
 
 1. **Run T1–T5 (§4.3) on a signed, sandboxed build** before v1.0 is submitted, and record the results — including T3's actual errno — in a follow-up record. Until then §4's ruling rests on documentation.
 2. **Target naming** for `SNMPTestSupport` (proposed), alongside ADR-SNMP-01 §8 item 3's `SNMPTransportPOSIX`; and the CI step that runs the conformance suite on loopback outside the deny-network profile.
-3. **FR-22 defaults** belong in the specification. Proposal: 1 s timeout, 2 retries, backoff factor 2, cap 8 s — 7 s worst case for an unanswered request, which T4 must find long enough for a user to answer the consent alert.
+3. **FR-22 defaults** belong in the specification. Proposal: 1 s timeout, 2 retries, backoff factor 2, cap 8 s — 7 s worst case for an unanswered request, which T4 must find long enough for a user to answer the consent alert. The specification also states the bounds `RetryPolicy.init` enforces (§3.4): the largest retry count, backoff factor and cap a user may configure.
+5. **Run §3.6's IPv6 cases and the `Darwin` branch** on macOS and on a Linux host with IPv6: loopback round-trip, `IPV6_V6ONLY`, an oversize IPv6 datagram (65,508–65,527 octets are legal IPv6 payloads that the single 65,507 limit discards), and a link-local exchange with a zone.
 4. **Name resolution**: where the host-name-to-`SNMPAddress` step lives (a resolver protocol in the core with a `getaddrinfo` conformance beside the POSIX transport is the obvious shape), and how both address families are tried (TN3151's connect-by-name and Happy Eyeballs advice, adapted to a datagram protocol).
 
 ---
