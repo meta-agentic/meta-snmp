@@ -56,7 +56,7 @@ You are a reviewer competent in cryptographic implementation. You review hand-wr
 - [ ] Truncation lengths are exactly ADR-03 §2.3's table (12, 12, 16, 24, 32, 48) and key lengths (16, 20, 28, 32, 48, 64).
 - [ ] Password-to-key expands to exactly 1 048 576 octets by cyclic repetition, streams it, rejects passwords shorter than 8 octets; localisation is `H(Ku ‖ engineID ‖ Ku)`. RFC 3414 §A.3 vectors pass.
 - [ ] Verify path: received length ≠ N rejected before comparison; MAC computed with the parameter field zeroed; comparison is `ConstantTime.equals`; authentication precedes decryption.
-- [ ] Constant-time comparison: inspect the release-build disassembly (`swift build -c release`, arm64 and x86_64) of `ConstantTime.equals` and its inlined call sites; no branch or early exit depends on byte values. Cite the disassembly excerpt.
+- [ ] Constant-time comparison: inspect the release-build disassembly (`swift build -c release`, arm64 and x86_64) of `ConstantTime.equals` (declared `@inline(never)`, so the function body itself; confirm it was not inlined anyway); no branch or early exit depends on byte values. Cite the disassembly excerpt.
 
 ### Family B — DES-CBC
 
@@ -75,6 +75,7 @@ You are a reviewer competent in cryptographic implementation. You review hand-wr
 - [ ] Key = first 16/24/32 octets of Kul; extension applied **only** when Kul is shorter; the selected extension comes from the per-user setting, never from an OID.
 - [ ] Blumenthal: `Kul ← Kul ‖ H(Kul)` with H the user's auth hash, truncated (draft-blumenthal-aes-usm-04 §3.1.2.1). Appendix A.1 vector passes.
 - [ ] Reeder: `Kₙ₊₁ = localize(passwordToKey(Kₙ), engineID)`, concatenated, truncated (draft-reeder-snmpv3-usm-3desede-00 §2.1). Appendix B.1 and B.2 vectors pass. The one-round assertion of ADR-03 §2.2 exists.
+- [ ] The extension uses the hash of the authentication protocol the `LocalizedKey` records (ADR-03 §2.3), not a hash chosen by the privacy protocol.
 - [ ] Interop fixtures exist for each agent and variant ADR-03 §2.7 and §6 name, or their absence is listed as a blocking finding.
 
 ## 5. Evidence a review must cite
