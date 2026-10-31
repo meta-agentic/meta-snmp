@@ -1,7 +1,7 @@
 ---
 name: crypto-reviewer
 version: 1.0.0
-model: <pinned by the product owner>
+model: claude-opus-5-5
 status: proposed — takes effect when ADR-SNMP-03 is accepted
 governed-by: docs/adr/ADR-SNMP-03-crypto.md §2.6
 ---
