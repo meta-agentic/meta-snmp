@@ -28,7 +28,8 @@ built (see the ADR's open items). The macOS app above the boundary uses SwiftUI,
 Keychain and whatever else the platform offers. Why, and the rule a reviewer checks:
 [docs/adr/ADR-SNMP-01](docs/adr/ADR-SNMP-01-portability-boundary.md). The transport's
 API, and why the sandboxed app uses the same BSD-sockets transport (proposed):
-[docs/adr/ADR-SNMP-02](docs/adr/ADR-SNMP-02-transport.md).
+[docs/adr/ADR-SNMP-02](docs/adr/ADR-SNMP-02-transport.md). The concurrency model
+(proposed): [docs/adr/ADR-SNMP-04](docs/adr/ADR-SNMP-04-concurrency.md).
 
 | Target | Kind | Purpose |
 |--------|------|---------|
