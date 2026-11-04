@@ -5,7 +5,7 @@
 | **Status** | Proposed — the product owner rules on it; becomes *accepted* when the pull request carrying it merges |
 | **Date** | 2026-11-04 |
 | **Decides** | actors or structured tasks inside the core; what is `Sendable` at each module boundary; how FR-5, FR-6 and NFR-3 are held by the design |
-| **Decision** | **Each target's work is a task that owns its state. Actors hold only state shared between tasks, and do no work.** A target's task cannot throw, and it returns what it collected. The main actor receives bounded updates, one at a time, and per-target summaries; it never receives the rows of a collection or frees them. **How a v3 password reaches a target's task is not settled here (open item 1).** |
+| **Decision** | **Each target's work is a task that owns its state. Actors hold only state shared between tasks, and do no work.** A target's task cannot throw, and it returns what it collected. The main actor receives bounded updates, one at a time, and a summary as each target finishes. The rows stay with an actor that lives as long as the process, so the main actor does not free them. **How a v3 password reaches a target's task is not settled here (open item 1).** |
 | **Builds on** | [ADR-SNMP-01](ADR-SNMP-01-portability-boundary.md), whose import rule keeps Apple frameworks out of the core. Refines [ADR-SNMP-02](ADR-SNMP-02-transport.md) on two points of `SNMPDispatcher` (Decision 3). Uses the protocols of [ADR-SNMP-03](ADR-SNMP-03-crypto.md) unchanged |
 | **Governs** | `Sources/SNMPCore`, `Sources/MIBKit`, `Sources/SNMPCrypto`, `Sources/SNMPTransportPOSIX`, `Sources/snmpcli`, and the crossing from those into `Sources/SNMPToolkitApp` |
 
@@ -25,7 +25,7 @@ All timings below come from a throwaway prototype of this design, not kept in th
 flowchart TB
     subgraph app["Above the boundary"]
         Main["Main actor<br/>views and CollectionModel"]
-        Host["CollectionHost actor<br/>owns the collection, the pump and the rows"]
+        Host["CollectionHost actor, process lifetime<br/>owns runs, pumps and row stores"]
     end
     subgraph core["SNMPCore"]
         Col["SNMPCollection<br/>owns one root task per target"]
@@ -43,9 +43,9 @@ flowchart TB
     T1 -- "exchange" --> Disp
     T2 -- "exchange" --> Disp
     Disp -- "send, receive" --> Thr
-    T1 -- "VarBindBatch, at most 512" --> Host
-    T2 -- "VarBindBatch, at most 512" --> Host
-    Host -- "await apply, one bounded update at a time; then summaries" --> Main
+    T1 -- "rows, then finished" --> Host
+    T2 -- "rows, then finished" --> Host
+    Host -- "await apply, one bounded update at a time; a summary per finished target" --> Main
 ```
 
 ## Decision 1 — Tasks do the work; actors hold shared state and do no work
@@ -60,6 +60,8 @@ flowchart TB
 | `USMEngineState` | one engine's discovered ID, boots and time, shared by concurrent requests to it | proposed; the USM record decides it |
 | `StandardMIBBundle` | the cache of bundled module text | exists |
 | The compiled-MIB store | the current tree, replaced whole when a module is imported | proposed; MIBKit's own story names it |
+| `CollectionHost` (app) | the running collection and row store for each run key | Decision 5 |
+| `RowStore` (app) | one run's full rows, off the main actor | Decision 5; its shape is the UI/engine boundary record's |
 
 **Consequences**
 
@@ -82,11 +84,11 @@ flowchart TB
 | `SNMPCrypto` to `SNMPCore` | `[UInt8]`, the hash and cipher values, `CryptoError` | value types, no shared state (ADR-03) |
 | `SNMPCore` to `AuthenticationProtocol` and `PrivacyProtocol` conformers | `LocalizedKey`, `PrivacyKey`, `[UInt8]`, `OID` | value types; the protocols refine `Sendable` |
 | `SNMPCore` to `SNMPTransportPOSIX` | `SNMPTransport`, `SNMPAddress`, `InboundDatagram`, `SNMPTransportError` | value types; the conformer is on the closed list |
-| `SNMPCore` to the app and `snmpcli` | `SNMPEngine`, `CollectionRequest`, `TargetID`, `VarBind`, `VarBindBatch`, `CollectionOutcome`, `SNMPError` | value types, checked by the compiler |
+| `SNMPCore` to the app and `snmpcli` | `SNMPEngine`, `CollectionRequest`, `TargetID`, `VarBind`, `VarBindBatch`, `CollectionEvent`, `CollectionOutcome`, `SNMPError` | value types, checked by the compiler |
 | `SNMPCore` to the app and `snmpcli` | `SNMPCollection`, `SNMPDispatcher` | a `final class` of `let`s, checked by the compiler; an actor |
 | `MIBKit` to the app and `snmpcli` | `StandardMIBBundle`; the compiled tree as an immutable value; filter results as node indices | an actor; value types whose sharing costs no copy |
 | The app's pump to the main actor | `BoundedUpdate`, `CollectionSummary` | value types; the first is bounded by construction, the second has no rows (Decision 5) |
-| The credential store to `SNMPCore` | **not settled: open item 1** | whichever option is chosen must be `Sendable` and copyable to sit in a `CollectionRequest`; the three options all compile |
+| The credential store to `SNMPCore` | **not settled: open item 1** | whichever option is chosen must be `Sendable` and copyable to sit in a `CollectionRequest`; all three compile that way, and they differ in what they do to cancellation |
 
 **Consequences**
 
@@ -162,11 +164,16 @@ public struct WalkLimit: Sendable, Hashable {
     public static let `default`: WalkLimit           // 256 MiB per target; see open item 4
 }
 
+public enum CollectionEvent: Sendable {
+    case rows(VarBindBatch)
+    case finished(TargetID, CollectionOutcome)       // a target's last event; arrives without waiting for the others
+}
+
 public final class SNMPCollection: Sendable {
-    public let batches: AsyncStream<VarBindBatch>
+    public let events: AsyncStream<CollectionEvent>
     public func cancel()
     public func cancel(_ target: TargetID)
-    public func outcomes() async -> [TargetID: CollectionOutcome]
+    public func outcomes() async -> [TargetID: CollectionOutcome]   // waits for every target; for headless callers
     deinit                                           // cancels every target
 }
 
@@ -178,7 +185,7 @@ public struct SNMPEngine: Sendable {
 
 **What it means.** Targets have no parent task in common, so a thrown failure has no path from one to another. A cancelled walk catches `CancellationError` and returns its rows; a failure does the same with its own stop reason. `CollectionRequest` carries the target, the address, the operation, the retry policy and the security parameters, whose v3 password route is open item 1; a walk's `WalkLimit` is part of its operation.
 
-The walk charges each varbind against its limit as `112 + 4 × arcs + value octets`, approximately what it retains, and stops at the limit. So the limit holds however an agent shapes its answers. At a 64 MiB limit, resident memory grew by 63 MB for ordinary rows, 70 MB for 60 KB values and 66 MB for 8,000-arc OIDs.
+The walk charges each varbind against its limit by what it retains in decoded form, and stops at the limit. The charge is `112 + 4 × name arcs + the value's retained size`, and that last term is defined per value type beside the type itself: octets per byte, 4 bytes per arc for an OBJECT IDENTIFIER value, nothing extra for an integer. A new value type needs its own charge, and a test per value type holds it. At a 64 MiB limit, resident memory grew by 66 to 73 MB across ordinary rows, 60 KB values, 8,000-arc names and 15,000-arc OID values. So the charge tracks memory within about 15% for those shapes; it is an estimate and does not cover formatted copies in the row store.
 
 **What holds FR-5, one target's failure not affecting another**
 
@@ -188,8 +195,9 @@ The walk charges each varbind against its limit as `112 + 4 × arcs + value octe
 | Targets share no walk state | local variables in the task; a shared `var` does not compile. A walk could still share state through an actor, which review must catch | Compiler, for that form |
 | A silent target ends | `RetryPolicy`, validated when built, bounds every `exchange` | Test |
 | A target's expensive work does not stall the others | `exchange` encodes on the caller; decoding is in the walk's task | Test |
+| A slow target does not hold back the others' results | each target sends its own `.finished` event; only `outcomes()` waits for all, and the app does not use it | Test |
 | One target's memory is limited | a `WalkLimit` is required (compiler), and the walk charges it (test) | Compiler and test |
-| **What targets do share** | **Review only.** `SNMPDispatcher`, `USMEngineState`, `SaltSource`, the collection's `batches` stream and pump, the pool and process memory. Each critical section is meant to be short, and a stalled pump cannot stall a walk because the stream does not push back | Not structural |
+| **What targets do share** | **Review only.** `SNMPDispatcher`, `USMEngineState`, `SaltSource`, the collection's `events` stream and pump, the pool and process memory. Each critical section is meant to be short, and a stalled pump cannot stall a walk because the stream does not push back | Not structural |
 | **Slow targets taken together** | **Nothing.** They take a growing share of the ceiling; see "How the design fails" | Not structural; accepted cost |
 | **Memory across many targets** | **Nothing.** Each target has its limit, and the total is targets × limit | Not structural; open item 4 |
 | **A trap in any task** | **Nothing.** A trap ends the whole process and no concurrency design prevents it. NFR-8's fuzzing and a codec that throws are the guard | Not structural |
@@ -208,7 +216,7 @@ The walk charges each varbind against its limit as `112 + 4 × arcs + value octe
 | A view going away stops its walks | a view's task runs `CollectionHost.run`, and the pump's cancellation handler cancels the collection; cancelling that task ended the walks and the pump | Test |
 | A dropped handle with no consumer stops its walks | `deinit` cancels every target: no further requests went out | Test |
 | **A pump nobody cancels** | **Nothing.** The pump's frame holds the collection, so `deinit` cannot run, and the walks go on until they finish or reach their limit | Not structural; bounded by the limit |
-| **Other suspensions** | **Not necessarily prompt.** A walk also awaits `USMEngineState`, which is short, and possibly a credential read (open item 1), which may wait on the user | Depends on open item 1 |
+| **Other suspensions** | **Not necessarily prompt.** A walk also awaits `USMEngineState`, which is short, and under option A of open item 1 a credential read that may wait on the user. Such a target's own `.finished` waits for it; the others are not held. With one of eight targets stuck that way, the other seven reported within 7.5 ms of Stop | Depends on open item 1 |
 | **Work between suspensions** | **Cooperative, as all Swift cancellation is.** A CPU loop cancelled at its start ran its full 200 ms, and a parent waits for it. In a walk that work is one datagram, or one key localisation of 1 MiB of hashing, more with an AES key extension | Bounded, not enforced |
 
 **Consequences**
@@ -217,12 +225,13 @@ The walk charges each varbind against its limit as `112 + 4 × arcs + value octe
 2. One target can be cancelled alone, which is the only remedy for a slow target. A `TaskGroup` cannot do this: `addTask` returns no handle, and the group has only `cancelAll`. That is why targets are not children of one group.
 3. These root tasks are unstructured, so ownership stands in for structure, with the limits the table above states. An unfinished `SNMPCollection` is cancelled when released; a finished one still holds every row in its tasks' results until released, which matters for who releases it (Decision 5).
 4. `start` is a synchronous, `nonisolated` function, so its tasks do not inherit the main actor when the app calls it. In the prototype, no `encode` or `decode` ran on the main thread when `start` was called from the main actor.
-5. `securityFailure` has no varbinds, so the type itself holds INV-4 for the outcome. Rows sent through `batches` before the failure were already delivered; those are provisional until the outcome arrives, and the app discards them on `securityFailure` (open item 5). This part is held by a test, not by the type.
-6. `batches` is an unbounded `AsyncStream`, because `AsyncStream` has no back-pressure. It is still bounded overall: no more can pass through it than the walk limit, and its elements share storage with the walk's rows.
+5. `securityFailure` has no varbinds, so the type itself holds INV-4 for the outcome. Rows sent as events before the failure were already delivered; those are provisional until that target's `.finished` arrives, and the app discards them then (open item 5). A slow target elsewhere does not delay this. This part is held by a test, not by the type.
+6. `events` is an unbounded `AsyncStream`, because `AsyncStream` has no back-pressure. It is still bounded overall: no more can pass through it than the walk limit, and its elements share storage with the walk's rows.
+7. A whole-collection Stop is `collection.cancel()`, reached through `CollectionHost.stop(key)`: walks end, each target's `.finished` still arrives, and the stream then ends. Cancelling the pump's own task means nobody is watching: the walks are cancelled too, but the stream ends at once and no summaries are delivered. Iterating an `AsyncStream` in a cancelled task stops immediately, so Stop must not be built by cancelling the pump.
 
 ## Decision 5 — The main actor gets bounded updates, one at a time
 
-**Decision.** The engine does not run on the main actor. The only rows the main actor receives are `BoundedUpdate`s, by an awaited call from a single pump per collection. At the end it receives a `CollectionSummary` per target, with no rows. An app-side actor owns the collection and the rows, so the main actor never holds the last reference to them.
+**Decision.** The engine does not run on the main actor. The only rows the main actor receives are `BoundedUpdate`s, by an awaited call from a single pump per collection, plus a `CollectionSummary` as each target finishes. An app-side actor with process lifetime owns the running collections and their rows, so releasing them does not happen on the main thread.
 
 ```swift
 // In the app. The type names are this record's; the row store's shape is the UI/engine boundary record's.
@@ -235,25 +244,37 @@ struct BoundedUpdate: Sendable {
 
 @concurrent func pump(_ collection: SNMPCollection, store: RowStore, model: CollectionModel) async {
     await withTaskCancellationHandler {
-        for await batch in collection.batches {
-            // format, keep the full rows in the store and pace to the screen here, off the main actor
-            for update in BoundedUpdate.split(batch.varbinds.map(Row.init)) { await model.apply(update) }
+        var pending: [Row] = []                // flushed at maximumRows or every 100 ms, in `flush`
+        for await event in collection.events {
+            switch event {
+            case .rows(let batch):             // format, coalesce, off the main actor
+                pending += batch.varbinds.map(Row.init)
+                if flushIsDue { await flush(&pending, to: model) }
+            case .finished(let target, let outcome):
+                await flush(&pending, to: model)
+                await store.keep(outcome, for: target)
+                await model.finished(target, outcome.summary)
+            }
         }
     } onCancel: { collection.cancel() }
-    let outcomes = await collection.outcomes()
-    await store.keep(outcomes)                 // the rows stay off the main actor
-    await model.finish(outcomes.mapValues(\.summary))
 }
 
-actor CollectionHost {                         // the main actor holds this, never the collection or the store's rows
-    private var current: SNMPCollection?
-    func run(_ requests: [CollectionRequest]) async {
-        let collection = engine.start(requests)
-        current = collection
-        await pump(collection, store: store, model: model)
-        current = nil                          // released here, not on the main actor
+actor CollectionHost {
+    static let shared = CollectionHost()       // never released, so its deinit never runs on the main thread
+    private final class Run: Sendable { let collection: SNMPCollection; let store = RowStore() }
+    private var running: [RunKey: Run] = [:]
+    private var stores: [RunKey: RowStore] = [:]
+
+    func run(_ requests: [CollectionRequest], key: RunKey, model: CollectionModel) async {
+        running[key]?.collection.cancel()      // a restart stops its predecessor
+        let run = Run(collection: engine.start(requests))
+        running[key] = run; stores[key] = run.store
+        await pump(run.collection, store: run.store, model: model)
+        if running[key] === run { running[key] = nil }   // a late predecessor cannot clear its successor
     }
-    func cancel(_ target: TargetID) { current?.cancel(target) }
+    func cancel(_ target: TargetID, key: RunKey) { running[key]?.collection.cancel(target) }
+    func stop(_ key: RunKey) { running[key]?.collection.cancel() }
+    func discard(_ key: RunKey) { stores[key] = nil }    // rows freed here, not on the main actor
 }
 ```
 
@@ -267,7 +288,7 @@ actor CollectionHost {                         // the main actor holds this, nev
 
 Every job in the first row is tiny, yet they drain together in one run-loop turn and freeze the window. Awaiting each call is what lets the run loop turn between them. Batching on top of that stops the main thread being busy all the time.
 
-Releasing rows is work too. Freeing 1,000,000 ordinary rows on the main actor took 47 to 69 ms in two separate measurements, with no other processing. That is why the rows must not reach the main actor even as a reference. In the prototype, with the host driven from the main actor, none of about 19,000 rows was released on the main thread.
+Releasing rows is work too. Freeing 1,000,000 ordinary rows on the main actor took 47 to 126 ms across three separate measurements on this Mac, with no other processing. That is why the rows must not reach the main actor even as a reference, nor sit behind a reference it could be the last to drop. `isolated deinit`, the direct cure, needs macOS 15.4, above C-1, so the host is simply never released. In the prototype, driven from the main actor, none of about 6,500 rows was released on the main thread.
 
 **How far structure carries NFR-3**
 
@@ -276,8 +297,9 @@ Releasing rows is work too. Freeing 1,000,000 ordinary rows on the main actor to
 | Engine async work runs off the main actor | where a function is an actor method or `@concurrent`, the compiler moves it. That every entry point is so declared is a rule; the check confirms only the absence of `@MainActor` | Compiler per function; rule overall |
 | Each update has a bounded size | `BoundedUpdate` has a private initialiser and only `split` makes one, so the bound cannot be skipped and no row is dropped | Compiler, for the type |
 | Updates cannot pile up in one turn | one pump per collection, awaiting each `apply` | Reading the pump; measured |
-| **`BoundedUpdate` is the only crossing** | **Nothing in the type system.** A view's `Task { }` can iterate the public `batches` or call `outcomes()` on the main actor. The check confines both to one file | Rule and check |
-| **Rows are freed off the main actor** | **Ownership by `CollectionHost`.** Any main-actor code holding the last reference frees them there | Rule and test |
+| A restart cannot strand a run | `run` compares identity before clearing, and each run has its own model and store; after a restart, `cancel(target)` reached the new run and the old run ended | Test |
+| **`BoundedUpdate` is the only crossing** | **Nothing in the type system.** A view's `Task { }` can iterate the public `events` or call `outcomes()` on the main actor. The check confines both to one file | Rule and check |
+| **Rows are freed off the main actor** | **Ownership by `CollectionHost`, which is never released.** A `CollectionModel` or any other main-actor code that keeps rows of its own frees those there, so a model holds counts and the visible window only | Rule and test |
 | **Expensive synchronous engine calls** | **Nothing in the type system.** Public entry points of unbounded cost are `async`. `Task { }` from a view inherits the main actor, and a synchronous call in it runs on the main thread; an `async` `@concurrent` one does not | Rule and check |
 | **A `@MainActor` method that is simply slow** | **Nothing.** The compiler has no notion of time | Measured only |
 | **SwiftUI layout, Charts, drawing** | **Nothing.** The framework owns that time on the main thread | Measured only |
@@ -295,9 +317,11 @@ The probe is stricter than NFR-3's wording, since one turn may hold several jobs
 
 **Consequences**
 
-1. Key localisation stays off the main actor: it hashes 1 MiB, about 6 to 7 ms for a naive Swift SHA-256 on this Mac, a large part of the budget on fast hardware. `localizedKey` is public and synchronous in ADR-03, so the app must not call it; the check in Decision 6 covers that.
-2. Filtering (NFR-2) runs as a `@concurrent` function over an immutable tree and is cancelled by the next keystroke. It must check for cancellation at intervals, which is discipline a test confirms, not structure.
-3. Bulk CPU work such as compiling MIBs runs below collection's priority and yields between chunks. With twice the core count of tasks in 50 ms chunks, a `.userInitiated` wake-up took 1.4 ms when those tasks ran at `.medium`, and no measurable delay at `.utility`. A wake-up at `.medium` among them took 58.7 ms. Tasks that never yield starved the pool entirely: that run had not finished when stopped after 60 s. The main actor was not delayed by a saturated pool of blocked tasks, but collection would be, and a starved reader looks like a false timeout.
+1. The pump must coalesce. Without it, one awaited main-actor call per event let the stream back up behind the main actor, and a target's `.finished` queued behind its rows: 30 ms after Stop none of seven summaries had arrived. With the flush above, all seven arrived within 7.5 ms.
+2. A view starts a run with a fresh `CollectionModel`, so a stopped predecessor's late updates reach a model nothing displays. This is what makes `.task(id:)` restarts safe, and it is a rule the app's test holds.
+3. Key localisation stays off the main actor: it hashes 1 MiB, about 6 to 7 ms for a naive Swift SHA-256 on this Mac, a large part of the budget on fast hardware. `localizedKey` is public and synchronous in ADR-03, so the app must not call it; the check in Decision 6 covers that.
+4. Filtering (NFR-2) runs as a `@concurrent` function over an immutable tree and is cancelled by the next keystroke. It must check for cancellation at intervals, which is discipline a test confirms, not structure.
+5. Bulk CPU work such as compiling MIBs runs below collection's priority and yields between chunks. With twice the core count of tasks in 50 ms chunks, a `.userInitiated` wake-up took 1.4 ms when those tasks ran at `.medium`, and no measurable delay at `.utility`. A wake-up at `.medium` among them took 58.7 ms. Tasks that never yield starved the pool entirely: that run had not finished when stopped after 60 s. The main actor was not delayed by a saturated pool of blocked tasks, but collection would be, and a starved reader looks like a false timeout.
 
 ## Decision 6 — The rules a compiler cannot check are a script
 
@@ -307,9 +331,9 @@ The probe is stricter than NFR-3's wording, since one turn may hold several jobs
 B="Sources/SNMPCrypto Sources/SNMPCore Sources/MIBKit Sources/SNMPTransportPOSIX Sources/snmpcli"
 S='--include=*.swift'
 # Below the boundary: no main actor, no isolation escape hatch, no blocking wait, no Dispatch.
-grep -rnE '@MainActor|MainActor\.|nonisolated\(unsafe\)|assumeIsolated|@preconcurrency|Thread\.sleep|DispatchSemaphore|DispatchGroup|DispatchQueue|\.wait\(\)' $B "$S" 2>/dev/null
-grep -rnE '(^|[^.[:alnum:]_])(poll|sleep|usleep|nanosleep|select)\(' $B "$S" 2>/dev/null | grep -v '/SNMPTransportPOSIX/'
-grep -rlE '(Data|String)\(contentsOf:' $B "$S" 2>/dev/null | grep -vE '/StandardMIBBundle\.swift$'
+grep -rnE '@MainActor|MainActor\.|nonisolated\(unsafe\)|assumeIsolated|@preconcurrency|Thread\.sleep|DispatchSemaphore|DispatchGroup|DispatchQueue|NSCondition|RunLoop|\.wait\(\)' $B "$S" 2>/dev/null
+grep -rnE '(^|[^.[:alnum:]_])(poll|sleep|usleep|nanosleep|select|read|recv|recvfrom|recvmsg|sendto|pthread_[a-z_]+)\(|(^|[^[:alnum:]_])Thread[[:space:]]*[({]' $B "$S" 2>/dev/null | grep -v '/SNMPTransportPOSIX/'
+grep -rlE '(Data|String|NSData|NSString)\(contentsOf|FileHandle\(|\.contents\(atPath' $B "$S" 2>/dev/null | grep -vE '/StandardMIBBundle\.swift$'
 # Unstructured tasks only where this record places them; @unchecked Sendable only on the closed list.
 grep -rlE '\bTask(<[^>]*>)?(\.init)?[[:space:]]*[({]|\bTask(<[^>]*>)?\.detached' $B "$S" 2>/dev/null | grep -vE '/(SNMPDispatcher|SNMPEngine)\.swift$'
 grep -rl '@unchecked Sendable' $B "$S" 2>/dev/null | grep -vE '/(POSIXTransport|SaltSource)\.swift$'
@@ -317,7 +341,7 @@ grep -rl '@unchecked Sendable' $B "$S" 2>/dev/null | grep -vE '/(POSIXTransport|
 grep -nE 'NonisolatedNonsendingByDefault|defaultIsolation' Package.swift
 # The app never localises a key itself, and touches a collection's rows in one file.
 grep -rn 'localizedKey(' Sources/SNMPToolkitApp "$S"
-grep -rlE '\.batches|\.outcomes\(\)' Sources/SNMPToolkitApp "$S" | grep -vE '/CollectionHost\.swift$'
+grep -rlE '\.events|\.outcomes\(\)|\.start\(' Sources/SNMPToolkitApp "$S" | grep -vE '/CollectionHost\.swift$'
 ```
 
 **What it means.** Each rule is checked by reading text, the same trade ADR-01 made. It catches the plain mistake, not a determined one, and not a blocking call or a spelling it does not list. Where a row in this record says "check", this is all it means.
@@ -339,7 +363,7 @@ grep -rlE '\.batches|\.outcomes\(\)' Sources/SNMPToolkitApp "$S" | grep -vE '/Co
 | 16 | about 0.4 s | about 3 minutes |
 | 32 | about 7 s | about 50 minutes |
 
-That lasts as long as those walks do, and there is no walk deadline. This is an accepted cost. The remedy is the user's: `cancel(target)` ends a target alone and keeps its rows, so the app must show which targets are slow. Nothing cuts one off automatically (open item 4).
+That lasts as long as those walks do, and there is no walk deadline. This is an accepted cost. The remedy is the user's: cancelling one target ends it alone and keeps its rows, so the app must show which targets are slow. A slow target does not hold back other targets' results, which arrive as each one finishes. Nothing cuts one off automatically (open item 4).
 
 **A very large table.** Rows reach the main actor bounded (Decision 5), and cancellation works throughout, so the window stays alive. Memory is what grows, by about 144 bytes per ordinary varbind: 137 MB per million. The walk stops at `WalkLimit`, default 256 MiB, or roughly 1.6 million ordinary varbinds, with `.limitReached`, keeps its rows and says it was cut short. A table larger than that cannot be fully collected without raising it.
 
@@ -354,7 +378,9 @@ A limit is required because FR-23's check cannot end every walk: an agent return
 - **Custom executors, or an actor pinned to a thread:** `DispatchSerialQueue` as an actor's executor compiles for macOS 14, but no actor here blocks, so it pays for nothing. `TaskExecutor` needs macOS 15, and `Task.immediate` needs macOS 26, both above C-1.
 - **A walk limit counting varbinds:** about 60 GB per target from an agent sending 60 KB values.
 - **One byte budget shared by all targets:** one hostile target could spend it and stop the honest ones, which is the coupling FR-5 forbids.
-- **Sending the finished rows to the main actor:** freeing a million of them there takes 47 to 69 ms.
+- **Sending the finished rows to the main actor:** freeing a million of them there takes 47 to 126 ms.
+- **A host released with its window, relying on `isolated deinit`:** needs macOS 15.4, above C-1.
+- **Refusing a second `run` on the same key, or waiting for the first to end:** a refused `.task(id:)` restart would show stale results, and waiting could hang on a credential prompt.
 - **Pushing each varbind to the main actor as it arrives:** 488.7 ms in one run-loop turn, Decision 5's table.
 - **Turning on `NonisolatedNonsendingByDefault` in the core:** plain async engine functions would run on the main actor when called from it.
 - **Threads and completion handlers:** cancellation and `Sendable` plumbing would be written by hand, and ADR-02 rejected callbacks at the transport on the same grounds.
@@ -369,17 +395,18 @@ A limit is required because FR-23's check cannot end every walk: an agent return
 
 ## Open items
 
-1. **How a v3 password reaches a target's task. A credential decision, not settled here.** ADR-03's `localizedKey(password: borrowing Credential, engineID:)` needs the password after discovery, on the network, inside the target's task, because a first-contact target has no engine ID at `start`. A `~Copyable` credential cannot sit in a `CollectionRequest` or an array of them, so this record's `start` gives it no route. The concurrency design holds under each option, because each gives `CollectionRequest` a `Sendable`, copyable field, and all three compiled that way:
-   - **A: a credential source (recommended).** `CollectionRequest` carries `any CredentialSource`, a `Sendable` protocol the core defines with `func withCredential<R: Sendable>(_ body: (borrowing Credential) throws -> R) async throws -> R`, conformed to by the Keychain adapter. It leaves ADR-03 unchanged and matches ADR-01's credential-store protocol, and the password exists only inside the borrow. Costs: the read can wait on the user, so cancellation is not prompt during it and the adapter must not block the pool; and the community string needs a derived `Sendable` redacted form.
-   - **B: split key localisation.** Derive `Ku` before `start` and carry it as a redacted `Sendable` value, then localise per engine. Changes ADR-03's API. `Ku` works for every engine using that password, and lives for the whole collection.
-   - **C: a copyable, redacted `Credential`.** Simplest, and carries the community string the same way. Changes ADR-03's `borrowing` signature and settles its open item 6, and leaves the password in memory for the whole collection.
+1. **How a v3 password reaches a target's task. A credential decision, not settled here.** ADR-03's `localizedKey(password: borrowing Credential, engineID:)` needs the password after discovery, on the network, inside the target's task, because a first-contact target has no engine ID at `start`. A `~Copyable` credential cannot sit in a `CollectionRequest` or an array of them, so this record's `start` gives it no route. The rest of this design does not depend on the choice, but FR-6 does: only B and C keep cancellation prompt for every target without extra machinery.
+   - **A: a credential source.** `CollectionRequest` carries `any CredentialSource`, a `Sendable` protocol the core defines with `func withCredential<R: Sendable>(_ body: (borrowing Credential) throws -> R) async throws -> R`. It leaves ADR-03 unchanged and matches ADR-01's credential-store protocol, and the password is read only if needed. Costs: a user wait happens inside a walk. That target cannot honour FR-6 promptly unless the adapter abandons the read on cancellation, though the other targets are not held. The password also does not exist only inside the borrow: `withCheckedContinuation` refuses a `~Copyable` value, so an adapter reading off the pool must carry copyable bytes, and an actor cannot conform, because the compiler refuses to send the non-`Sendable` closure. The community string needs a separate derived, redacted form.
+   - **B: split key localisation.** Before `start`, read the password and derive `Ku`, then carry it as a redacted `Sendable` value and localise per engine in the target's task. Benefits: no user wait inside a walk, prompt cancellation everywhere, and the password is gone before any traffic. ADR-03's AES key extensions work from the localised key, and `passwordToKey` is already a separate primitive, so the change is to `AuthenticationProtocol.localizedKey`'s signature. Costs: changes ADR-03; `Ku` works on every engine using that password and lives for the whole collection; the community string needs a redacted form of its own; every credential is read up front, even for a target that never answers.
+   - **C: a copyable, redacted `Credential`.** Same benefits for the walk: no user wait inside it, and prompt cancellation. Simplest, and it carries the community string the same way. Costs: changes ADR-03's `borrowing` signature and settles its open item 6; the password itself stays in memory for the whole collection, and a copyable type gives up what `~Copyable` offered.
+   - **Recommendation: B.** It is the only option that gives prompt cancellation and also keeps the password out of the walk. It costs an ADR-03 change, which is the product owner's to accept. If ADR-03 must not change, A is workable, with an adapter that abandons the read on cancellation and the costs above.
 2. **The ceiling's number and meaning.** FR-5 requires a "stated concurrency ceiling" and the specification states none. This record reads it as requests in flight, so any number of targets may be collecting while at most that many wait on the network. Proposed default: 16, twice NFR-10's eight targets. The product owner confirms the reading and the number, and the specification states them.
 3. **NFR-3's "measured by" text and its baseline.** The text says "main-thread hang instrumentation", which cannot see 16 ms. Proposed wording: the run-loop probe and combined workload of Decision 5. Still to confirm: whether a whole turn must fit in 16 ms, which is stricter than "no main-actor work exceeds 16 ms", and which Mac is the baseline. A pass on the fastest available machine says little; the proposal is the slowest Apple silicon Mac the product intends to support.
-4. **Limits.** A default of 256 MiB per target is a proposal. Still open: whether a user can raise it, whether an overall memory limit is wanted despite the coupling it brings, and whether a walk deadline is wanted against slow targets.
+4. **Limits.** A default of 256 MiB per target is a proposal. Still open: whether a user can raise it, whether an overall memory limit is wanted despite the coupling it brings, and whether a walk deadline is wanted against slow targets. The app-wide `RunKey` also needs defining by the UI/engine boundary record.
 5. **INV-4 and rows already shown.** This record reads INV-4 strictly: on a security failure the app discards that walk's earlier rows, although they had been authenticated. Keeping them, clearly marked, is the alternative; it needs the product owner's reading of the invariant.
 6. **A forged datagram with a matching id.** `exchange` completes on the first match, and authentication happens later, in the walk's task. Whether a matching datagram that fails authentication ends the walk or is discarded while the exchange keeps waiting belongs to the USM record, as ADR-02 says. If discarded, `OutboundRequest` needs a validation closure, which would also run on the caller's task.
 7. **The row store** behind `BoundedUpdate`, its retention, its pacing, and whether 512 is the right bound once a real table view is attached belong to the UI/engine boundary record. The 10.5 ms in Decision 5 came from a model array that grew on the main actor, and is a warning against that shape at scale.
-8. **Not yet run.** The prototype compiled for a macOS 14 target but ran only on macOS 26, and it has not run on Linux. It ran with no real socket and no real cryptography. Both prototypes, the first and the later one for the limit and the host, were clean under ThreadSanitizer on macOS, and their signatures compiled across two modules against the repository's real `OID`. The slow-target figures are a simulation. The availability statements were compiled for a macOS 14 target. The Instruments figures come from Apple's talk and a forum answer, not reference documentation.
+8. **Not yet run.** The prototype compiled for a macOS 14 target but ran only on macOS 26, and it has not run on Linux. It ran with no real socket and no real cryptography. All the prototypes, including the later ones for the limit, the events and the host, were clean under ThreadSanitizer on macOS, and their signatures compiled across two modules against the repository's real `OID`. The slow-target figures are a simulation. The availability statements were compiled for a macOS 14 target. The Instruments figures come from Apple's talk and a forum answer, not reference documentation.
 9. **Building it.** The probe, the check script and the tests named here are not yet written; each belongs to the story that first needs it.
 
 ---
