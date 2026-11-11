@@ -52,3 +52,10 @@ swift test
 Building needs only the Swift toolchain. **Running the tests needs a full Xcode
 install** — the test frameworks are not part of the Command Line Tools, so `swift test`
 fails with `no such module 'XCTest'` on a CLT-only machine.
+
+## Review
+
+Two kinds of change are reviewed before merge by an independent reviewer started from a pinned, versioned definition, and the review cites that definition's version and the commit it reviewed:
+
+- the USM cryptography: [docs/review/crypto-reviewer.md](docs/review/crypto-reviewer.md);
+- every architecture decision record: [docs/review/adr-reviewer.md](docs/review/adr-reviewer.md). Merging an ADR accepts and freezes it, so it is not merged without an approving review of its final commit.
