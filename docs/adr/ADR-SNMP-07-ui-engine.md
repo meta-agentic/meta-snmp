@@ -2,11 +2,12 @@
 
 | | |
 |---|---|
-| **Status** | Proposed — the product owner rules on it; becomes *accepted* when the pull request carrying it merges |
+| **Status** | Proposed — the product owner rules on it (§2); becomes *accepted* when the pull request carrying it merges, which it does not while any ruling in §2 is still a placeholder |
 | **Date** | 2026-11-11 |
 | **Decides** | what the app sees of the core (sessions, streams of varbinds, chart series); the credential-store protocol the core owns and the Keychain adapter implements; how SET confirmation tokens are minted and checked (INV-5) |
-| **Decision** | **The app hands the core references and values, and gets back a handle, batches of varbinds and one outcome per target.** It never sees a socket, a key or BER. Rows stay in an app-side store; the main actor holds a count and a window of at most 512 rows. **Secrets are read through a read-only `CredentialStore` the core defines**, and the macOS adapter is the only file that imports `Security`. **A SET has its own path, which spends a non-copyable `SetConfirmation`.** The token carries the exact request it confirms, can be used once, lasts 60 seconds, and is minted by one call that only the app's confirmation flow makes. **How a v3 password reaches the walk (ADR-04 open item 1) is the product owner's choice (§3.3). This record is written for the recommended option, B.** |
-| **Builds on** | [ADR-SNMP-01](ADR-SNMP-01-portability-boundary.md) §3.2 clarification 3 (the Keychain is above the boundary), [ADR-SNMP-02](ADR-SNMP-02-transport.md) (the dispatcher, `RetryPolicy`), [ADR-SNMP-03](ADR-SNMP-03-crypto.md) (§2.3, open item 6), [ADR-SNMP-04](ADR-SNMP-04-concurrency.md) (Decision 5, open items 1, 4, 5 and 7). It refines ADR-04 Decision 5 on what `BoundedUpdate` carries. Under option B it also refines ADR-03 §2.3's `localizedKey` requirement |
+| **Decision** | **The app hands the core references and values, and gets back a handle, batches of varbinds and one outcome per target.** It never sees a socket, a key or BER. Rows stay in an app-side store; the main actor holds a count and a window of at most 512 rows. **Secrets are read through a read-only `CredentialStore` the core defines**, and the macOS adapter is the only file that imports `Security`. **A SET has its own path, which spends a non-copyable `SetConfirmation`.** The token carries the exact request it confirms, can be used once, expires 60 seconds (proposed) after the confirmation sheet is shown, is checked immediately before the datagram is sent, and is minted by one call that only the app's confirmation flow makes. **How a v3 password reaches the walk (ADR-04 open item 1) is the product owner's ruling (§2, ruling 1). This record is written for the recommended option, B.** |
+| **Builds on** | [ADR-SNMP-01](ADR-SNMP-01-portability-boundary.md) §3.2 clarification 3 (the Keychain is above the boundary), [ADR-SNMP-02](ADR-SNMP-02-transport.md) (the dispatcher, `RetryPolicy`), [ADR-SNMP-03](ADR-SNMP-03-crypto.md) (§2.3, open item 6), [ADR-SNMP-04](ADR-SNMP-04-concurrency.md) (Decisions 2, 3, 5 and 6, open items 1, 4, 5, 6 and 7) |
+| **Supersedes in part** | Accepted records are not edited, so every change this record makes to one is listed here, and stated in full where it is made. **[ADR-SNMP-04](ADR-SNMP-04-concurrency.md) Decision 5:** `BoundedUpdate` (its fields; its `private init(rows:)` becomes `fileprivate init(totalRows:unorderedRows:windowStart:rows:)`, which enforces the bound; `static func split` is removed), the pump's body (formatting moves from the pump into `RowStore`), and the NFR-3 table row "Each update has a bounded size", now held by that initialiser (§3.2). **ADR-SNMP-04 Decision 6:** the key-function check line `grep -rn 'localizedKey(' Sources/SNMPToolkitApp "$S"`, replaced by §3.6's wider line (finding 8 of the review). **[ADR-SNMP-02](ADR-SNMP-02-transport.md) §3.4:** `OutboundRequest` gains an optional pre-send hook (§3.4); existing call sites still compile. **Under option B only, [ADR-SNMP-03](ADR-SNMP-03-crypto.md) §2.3:** the requirement `localizedKey(password:engineID:)` is removed and replaced by `masterKey(password:)` and `localizedKey(master:engineID:)` (§3.3). That change is incompatible: a conformer and a caller of the removed requirement no longer compile |
 | **Governs** | the public surface of `Sources/SNMPCore` that `Sources/SNMPToolkitApp` and `Sources/snmpcli` use; in the app, the collection host, the row and series stores, the Keychain adapter and the SET confirmation flow |
 
 ---
@@ -27,9 +28,16 @@ ADR-01 put the app above the boundary and the Keychain with it. ADR-04 fixed how
 | **FR-17 / FR-18 / NFR-4** — live charts, counter-to-rate, 8 series at 1 s at 60 fps | a bounded number of points on the main actor, and a stated rate rule |
 | **ADR-01's second product** — a headless Linux collector or CLI | everything that is not UI below the line: the rate rule, the SET token, the store protocol |
 
-## 2. The product-owner answer
+## 2. Decisions of the product owner
 
-None yet. This record is **proposed**. The product owner rules on the password route in §3.3 (options A, B and C; the recommendation is B) and on the readings and numbers listed in §7. Engineering's recommendation is stated as the decision; if the ruling differs, this record is revised before it merges, not superseded after (ADR-02's rule).
+This record is **proposed**. Engineering's recommendation is written as the decision throughout, so that each ruling below is a one-line edit: replace the placeholder in the *Ruling* column with the ruling and its date. If a ruling differs from the recommendation, the sections in the last column are revised before this record merges, not superseded after (ADR-02's rule). **This record does not merge while any placeholder below remains**, because merging makes it accepted and frozen.
+
+| # | Question | Engineering's recommendation | Ruling | Sections that follow the ruling |
+|---|---|---|---|---|
+| 1 | **The v3 password route** (ADR-04 open item 1): A, B, C, or another? | B, on the comparison as restated in §3.3 | **⟨PLACEHOLDER — awaiting the product owner's ruling⟩** | §3.3's route, `CollectionRequest`, `SetRequest.security`, the ADR-03 entry under *Supersedes in part*, §3.6's key-function line |
+| 2 | **INV-4 and rows already shown** (ADR-04 open item 5): on a security failure, are that target's earlier rows dropped (strict reading) or kept, clearly marked? | strict, as ADR-04 reads it | **⟨PLACEHOLDER — awaiting the product owner's ruling⟩** | §3.2 rule 8, §3.5's series store |
+| 3 | **§7 item 3's numbers**: are they accepted as stated here, or are they proposals for the specification to state, which this record then cites? | proposals for the specification | **⟨PLACEHOLDER — awaiting the product owner's ruling⟩** | §3.2, §3.4, §3.5, §7 item 3 |
+| 4 | **Writes per SET**: `maximumWrites = 1` for v1.0, or more than one with an amendment to the specification's §3 non-goal ("SET exists for single values under confirmation; this is not a provisioning tool")? | none: a scope question. §7 item 3 sets out both alternatives side by side, with the use case that needs more than one | **⟨PLACEHOLDER — awaiting the product owner's ruling⟩** | §3.4 `SetRequest.maximumWrites`, the specification's §3 |
 
 ## 3. Decision
 
@@ -43,17 +51,19 @@ None yet. This record is **proposed**. The product owner rules on the password r
 | `SNMPAddress`, `RetryPolicy` | ADR-02 | where a target is, and how patiently to ask it |
 | `TargetID` | here | the app's stable identity for a configured target; opaque to the core; ADR-06 persists it |
 | `SecurityConfiguration`, `USMUser`, `CredentialReference` | here, §3.3 | references and protocol choices, never a secret |
+| `AuthProtocolID`, `PrivProtocolID`, `AESKeyExtension` | ADR-03, named here | which of ADR-03's authentication and privacy protocols, and which AES key extension, a user is configured with |
 | `CredentialStore`, `Credential`, `CredentialFailure` | here, §3.3 | the protocol the Keychain adapter conforms to; the adapter makes a `Credential` and nothing above the core can read one |
 | `ResolvedSecurity` | here, §3.3 | what a request carries; only `ResolvedSecurity.resolve` makes one |
 | `CollectionRequest`, `CollectionRequest.Operation`, `PollSpec` | here | one target's job |
-| `SNMPCollection`, `CollectionEvent`, `CollectionOutcome`, `CollectionSummary`, `WalkLimit` | ADR-04 | the handle and what it streams |
+| `SNMPCollection`, `CollectionEvent`, `CollectionOutcome`, `CollectionSummary`, `CollectionStop`, `WalkLimit` | ADR-04 | the handle, what it streams, and why a target stopped |
+| `InFlightCeiling` | ADR-04 | the FR-5 ceiling the app builds the dispatcher with |
 | `VarBindBatch` | its fields here | rows as they arrive |
 | `VarBind`, `SNMPValue`, `OID` | the codec stories | values |
 | `CounterRate`, `SeriesPoint`, `SeriesGap` | here, §3.5 | the rate rule |
-| `SetRequest`, `SetConfirmation`, `SetOutcome` | here, §3.4 | the SET path |
+| `SetRequest`, `PendingConfirmation`, `SetConfirmation`, `SetOutcome`, `SetRefusal` | here, §3.4 | the SET path |
 | `SNMPError` | ADR-05 places the cases this record adds | the failures |
 
-**What the app never sees:** a socket or the transport once it is built, BER, `USMEngineState`, `SaltSource`, `LocalizedKey`, `PrivacyKey`, `MasterKey`, or the bytes of a `Credential`. The app can hold a `ResolvedSecurity` and cannot open it. Some public entry points are not for the app either. Only the engine calls `SNMPDispatcher.exchange`. ADR-04's check already keeps ADR-03's key functions out of the app, and keeps `start`, `events` and `outcomes` inside `CollectionHost.swift`.
+**What the app never sees:** a socket or the transport once it is built, BER, `USMEngineState`, `SaltSource`, `LocalizedKey`, `PrivacyKey`, `MasterKey`, `CommunityString`, or the bytes of a `Credential`. The app can hold a `ResolvedSecurity` and cannot open it. Some public entry points are not for the app either. Only the engine calls `SNMPDispatcher.exchange`. ADR-04 Decision 6's check keeps `start`, `events` and `outcomes` inside `CollectionHost.swift`. Its key-function line looked only for `localizedKey(`, which is not enough under option B: the 1 MiB derivation of 6 to 7 ms that the line exists for (ADR-04 Decision 5 consequence 3) moves to `masterKey(password:)`, a public, synchronous protocol requirement, and the app can make the `Credential` it takes. §3.6 therefore replaces that line with one that matches `masterKey(`, `localizedKey(` and `privacyKey(`, in the app and in `AIBridge`.
 
 **Sessions.** The core keeps no session object for the app to hold. The word covers three different things:
 
@@ -78,7 +88,7 @@ public struct CollectionRequest: Sendable {
         case poll(PollSpec)                                        // FR-17: one GET per tick until stopped (§3.5)
     }
     public init(target: TargetID, address: SNMPAddress, operation: Operation,
-                policy: RetryPolicy, security: ResolvedSecurity)
+                policy: RetryPolicy, security: ResolvedSecurity)   // `security`: route B, §2 ruling 1
 }
 
 public struct VarBindBatch: Sendable {
@@ -93,7 +103,7 @@ public struct VarBindBatch: Sendable {
 
 ### 3.2 Rows: a store off the main actor and a window onto it (ADR-04 open items 4 and 7)
 
-**Decision.** Each run keeps all its rows in a `RowStore` actor in the app. The main actor's model holds a total count and a window of at most 512 rows. This refines ADR-04 Decision 5: `BoundedUpdate` still has a private initialiser and is still the only way rows reach the main actor, but it now carries the window, not every row of the run.
+**Decision.** Each run keeps all its rows in a `RowStore` actor in the app. The main actor's model holds a total count and a window of at most 512 rows. This supersedes part of ADR-04 Decision 5 (see the header). `BoundedUpdate` is still the only way rows reach the main actor, but it now carries a window, not every row of the run. ADR-04's `split` is removed, because nothing hands the main actor every row any more. The pump no longer formats rows; the store does (rule 3). The initialiser is `fileprivate`, not private: `RowStore` and `BoundedUpdate` are declared in one file, `RowStore.swift`, so only the store can make one. **The initialiser itself enforces the bound**, so ADR-04's NFR-3 row ("each update has a bounded size") is still held by the type and does not depend on the code of `RowStore.window`.
 
 ```swift
 // In the app.
@@ -103,12 +113,21 @@ struct RunKey: Sendable, Hashable {
     let slot: Slot
 }
 
+// Sources/SNMPToolkitApp/Rows/RowStore.swift declares BoundedUpdate and RowStore, and nothing else.
 struct BoundedUpdate: Sendable {
     static let maximumRows = 512    // and each Row field is still cut to 512 octets when built (ADR-04)
-    let totalRows: Int
+    let totalRows: Int              // the length of the current view (rule 2)
+    let unorderedRows: Int          // rows arrived since the current ordering was built; 0 without one (rule 2)
     let windowStart: Int
-    let rows: [Row]                 // rows windowStart ..< windowStart + rows.count of the current ordering
-    fileprivate init(totalRows: Int, windowStart: Int, rows: [Row])   // only RowStore makes one
+    let rows: [Row]                 // view positions windowStart ..< windowStart + rows.count
+    fileprivate init(totalRows: Int, unorderedRows: Int, windowStart: Int, rows: [Row]) {
+        precondition(rows.count <= Self.maximumRows, "a BoundedUpdate holds at most maximumRows rows")
+        precondition(windowStart >= 0 && windowStart + rows.count <= totalRows, "the window lies inside the view")
+        self.totalRows = totalRows
+        self.unorderedRows = unorderedRows
+        self.windowStart = windowStart
+        self.rows = rows
+    }
 }
 
 actor RowStore {
@@ -121,14 +140,16 @@ actor RowStore {
 
 **Rules**
 
-1. **One copy of each row.** While a target runs, the store keeps its batches as they arrive. At `.finished`, it replaces them with the outcome's array, which holds the same varbinds, so a finished walk is not held twice. The store's memory is ADR-04's per-target charge plus 4 bytes per row for each active ordering. Formatted text is never stored: the store formats a window when asked, at most 512 rows.
-2. **Sorting and filtering happen off the main actor** (FR-15). A `@concurrent` function runs over a snapshot of the store's arrays, which is a copy-on-write copy and copies no element. It builds an `Ordering`, a permutation of `Int32` row indices, which the store then swaps in. The next keystroke cancels it, as ADR-04 Decision 5 consequence 4 does for the MIB filter. A text filter formats every row inside that function, never in the actor and never on the main actor.
-3. **Pacing.** The pump appends each batch to the store. While rows arrive, at most every 100 ms (ADR-04's flush interval), and immediately when a target finishes, it asks the store for a fresh `BoundedUpdate` for the model's current window and awaits `model.apply`. Each update costs the main actor one array replacement of at most 512 rows and a count, however large the run is. This answers ADR-04's warning that its 10.5 ms measurement came from an array that grew on the main actor: no array on the main actor grows now.
+1. **One copy of each row, at a stable index.** Each row gets a **stable index** at `append`: its position in the run's arrival order. An index is never reused and never compacted. The store keeps one entry per batch (the batch's first index, its target, its offset within that target's varbinds, and its count), so finding a row is a binary search over batches and costs nothing per row. While a target runs, the store keeps its batches as they arrive. At `.finished`, it replaces them with the outcome's array. **The outcome's array equals that target's batches concatenated in sequence order** (a test holds it), so every row keeps its index and its offset, and a finished walk is not held twice. The store's memory is ADR-04's per-target charge, one entry per batch, and 4 bytes per row for each active ordering. Formatted text is never stored: the store formats a window when asked, at most 512 rows.
+2. **Sorting and filtering happen off the main actor** (FR-15). A `@concurrent` function runs over a snapshot of the store's arrays, which is a copy-on-write copy and copies no element. It builds an `Ordering`, a list of stable `Int32` row indices, which the store then swaps in. The next keystroke cancels it, as ADR-04 Decision 5 consequence 4 does for the MIB filter. A text filter formats every row inside that function, never in the actor and never on the main actor.
+   - **The view** is what a window's positions index. Without an ordering, it is every row not dropped (rule 8), in arrival order. With one, it is the ordering's indices, less any row dropped since the ordering was built. `totalRows` is the view's length. Because an ordering holds stable indices, nothing in it goes stale when the store changes underneath it: `.finished` keeps every index (rule 1), and a drop marks rows instead of removing them (rule 8).
+   - **Rows arriving under an ordering are not merged in on each flush.** A merge copies the whole ordering, 4 bytes per row, every 100 ms, which at a few million rows is tens of megabytes per flush. Instead they stay outside the view and are counted in `unorderedRows`, which the grid shows as "N new rows". The ordering is rebuilt off the actor while rows arrive: each rebuild starts when the previous one has finished, and no sooner than 1 s after it started (proposed, §7 item 3). It is rebuilt once more when the run finishes. Each rebuild costs a sort of the snapshot, O(n log n) comparisons, plus formatting every row while a text filter is active, all on the pool. A keystroke cancels a rebuild in flight and starts its own.
+3. **Pacing.** This replaces the pump body of ADR-04 Decision 5: the pump no longer formats, coalesces or splits rows. It appends each batch, unformatted, to the store. While rows arrive, at most every 100 ms (ADR-04's flush interval), and immediately when a target finishes, it asks the store for a fresh `BoundedUpdate` for the model's current window and awaits `model.apply`. Each update costs the main actor one array replacement of at most 512 rows and three counts, however large the run is. This answers ADR-04's warning that its 10.5 ms measurement came from an array that grew on the main actor: no array on the main actor grows now.
 4. **Scrolling** asks the store, through `CollectionHost`, for the new window. Rows not yet delivered draw as placeholders until it arrives.
 5. **512 stays the bound.** The window is the visible rows plus overscan above and below. At the 17 to 24 pt row heights of a macOS table, a tall display shows roughly 100 to 130 rows, so 512 allows about one and a half screens of overscan on each side. The NFR-10 run confirms it (open item 4).
 6. **The grid is pulled by row index.** AppKit's `NSTableView` asks its data source for the row count and then for a view for each visible row ([`NSTableViewDataSource`](https://developer.apple.com/documentation/appkit/nstableviewdatasource)), which is exactly the window model. SwiftUI's `Table` takes its rows as a collection of identifiable values. Whether it reads every element's identity on an update is not documented and was not measured here; if it does, that is O(rows) main-actor work at 1.6 million rows. So the result grid is an `NSTableView` inside an `NSViewRepresentable`, unless the NFR-10 run shows a SwiftUI `Table` over the windowed model staying inside 16 ms (open item 4).
 7. **Retention.** A store lives until a new run replaces it on the same `RunKey`, or until its investigation closes (`CollectionHost.discard`). It is never freed on the main actor (ADR-04) and nothing expires it on a timer. At worst it holds targets × `WalkLimit` for each results slot, with one results slot per open investigation.
-8. **INV-4 and rows already shown** (ADR-04 open item 5 is still the product owner's reading). Under the strict reading, when `.finished(target, .securityFailure)` arrives, the store drops that target's rows and the next update shows the error in their place. Under the alternative reading, the rows stay, marked. Either way it is one rule in `keep`. Until the product owner rules, this record follows ADR-04's strict reading.
+8. **INV-4 and rows already shown** (ADR-04 open item 5; §2 ruling 2). Under the strict reading, when `.finished(target, .securityFailure)` arrives, the store **marks** that target's rows as dropped: their indices stay allocated, the rows leave the view, and the next update shows the error in their place. Removing them from an active ordering is one O(n) pass off the actor. Under the alternative reading, the rows stay in the view, marked. Either way it is one rule in `keep`, and no index changes. Until §2 ruling 2 is written, this record follows ADR-04's strict reading.
 9. **Export** (FR-19) reads the store from a `@concurrent` writer, never from the model. The writer neutralises formula injection.
 
 **`RunKey`** (ADR-04 open item 4). Each open investigation has one results grid, one inspector (FR-16's current value, a `.get`) and one slot per chart. ADR-04's restart rule applies per key: a new walk in an investigation's results slot stops the walk before it, while charts run independently of each other and of the grid.
@@ -165,12 +186,18 @@ public enum CredentialFailure: Sendable, Equatable {
 | Property | Held by | Strength |
 |---|---|---|
 | The core has no way to ask a store to write, update or delete a secret | the protocol has one requirement, and it reads | Compiler, for the protocol. Nothing stops code in the core writing bytes it was lent to a file through `Foundation`; INV-1's persisted-state test and review cover that |
-| App code cannot read a secret back out of a `Credential` | its bytes are `internal` to `SNMPCore` | Compiler |
-| A `Credential` cannot be printed, interpolated, dumped or reflected | `print`, `String(describing:)`, `String(reflecting:)`, string interpolation, `dump` and `Mirror(reflecting:)` all need a copyable argument (§3.7) | Compiler |
-| A `Credential` cannot sit in a request or an array | a non-copyable stored property of a copyable struct, or an array element, is refused | Compiler |
+| App code cannot read a secret back out of a `Credential` | its bytes are `internal` to `SNMPCore` | Compiler (safe Swift) |
+| A `Credential` cannot be printed, interpolated, dumped or reflected | `print`, `String(describing:)`, `String(reflecting:)`, string interpolation, `dump` and `Mirror(reflecting:)` all need a copyable argument (§3.7) | Compiler (safe Swift) |
+| A `Credential` cannot sit in a request or an array | a non-copyable stored property of a copyable struct, or an array element, is refused | Compiler (safe Swift) |
 | A `Credential` is not persisted by `Codable` | it does not conform | Compiler, for `Codable` |
 | **The secret exists only inside the borrow** | **No.** The adapter holds copyable bytes between the Keychain read and `init`, and code inside `SNMPCore` can copy the bytes it is lent. No zeroisation is promised (ADR-03 §2.2) | Review |
-| `Security` appears only in the adapter | §3.6 | Check |
+| `ResolvedSecurity`, `MasterKey` and `CommunityString` cannot be made outside the core | none has a public initialiser | Compiler (safe Swift) |
+| `ResolvedSecurity`, `MasterKey` and `CommunityString` are not persisted by `Codable` | none conforms. A harness fixture (§3.6): a `Codable` struct holding a `ResolvedSecurity` fails to synthesise its conformance | Compiler, by absence of the conformance |
+| `ResolvedSecurity`, `MasterKey` and `CommunityString` print redacted, and their mirrors are empty | their `description`, `debugDescription` and `customMirror` | Test |
+| **What lives for the run cannot be copied, printed or kept in a request** | **No.** All three are copyable on purpose: a target's task needs the secret on every attempt (ADR-04 Decision 2 consequence 4). `print`, interpolation and `dump` accept them, and only their redaction keeps the secret out of the text | Test (the redaction row above) and review |
+| `Security` appears only in the adapter | §3.6: the import and the symbols | Check |
+
+**"Compiler (safe Swift)"** means the compiler holds the property for code that uses no unsafe constructs. With unsafe pointers it does not: code outside the core that copies a `SetConfirmation` with `withUnsafePointer`, `copyMemory` and `move()` can spend both copies, and `UnsafeRawPointer(p).load(as: [UInt8].self)` reads a `Credential`'s bytes back. The independent review built both outside the core, and both compiled and ran. Strict memory safety (`.strictMemorySafety()`, Swift 6.2 and later) flagged both, so §3.6 turns it on, with warnings as errors, for every module that uses the core from above, and a check lists every use that is acknowledged with `unsafe` there.
 
 **Why read-only.** The app's settings UI saves and deletes Keychain items through the adapter's own methods, which are app API and not part of the core's protocol. The core therefore has no store call that writes a secret, and the only code that writes one to the Keychain is one app file.
 
@@ -207,7 +234,7 @@ struct KeychainCredentialStore: CredentialStore {
 
 **Headless products.** `snmpcli` and the Linux collector have no Keychain. Each supplies its own `CredentialStore`; a prompt, the environment and a mode-0600 file are the obvious candidates. That choice is not made here. INV-1's "outside the Keychain" is a requirement on the macOS app, and the specification has to restate it for the headless products before either ships (open item 6).
 
-#### The route: how a v3 password reaches the walk (ADR-04 open item 1) — the product owner's choice
+#### The route: how a v3 password reaches the walk (ADR-04 open item 1) — §2 ruling 1
 
 ADR-03's `localizedKey(password: borrowing Credential, engineID:)` needs the remote engine ID, which a first-contact target only has after discovery, inside its own task. A non-copyable `Credential` cannot sit in a `CollectionRequest`; the compiler refuses it (§3.7). The three options are ADR-04's, restated with what each does to the store protocol.
 
@@ -238,14 +265,38 @@ public struct USMUser: Sendable, Hashable {
     public init(userName: String, auth: Auth?, priv: Priv?) throws(SNMPError)
 }
 
-/// Redacted, copyable. No public initialiser.
-public struct ResolvedSecurity: Sendable, CustomStringConvertible, CustomReflectable {
+/// Redacted, copyable, not Codable. No public initialiser. Holds, internally, a CommunityString (v1, v2c)
+/// or the user's name, protocols and MasterKeys (v3).
+public struct ResolvedSecurity: Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public var securityName: String { get }             // the user name, or "v1 community" / "v2c community"
+    public var description: String { get }              // names the security name and level; never a secret
+    public var debugDescription: String { get }         // the same
+    public var customMirror: Mirror { get }             // no children
     @concurrent
     public static func resolve(_ configuration: SecurityConfiguration,
                                from store: some CredentialStore) async throws(SNMPError) -> ResolvedSecurity
 }
+
+/// Ku, RFC 3414 §A.2: the 1 MiB expansion of a v3 password through one authentication protocol's hash.
+/// Redacted, copyable, Sendable, not Codable, not Equatable. No public initialiser: only `masterKey(password:)`
+/// makes one. Its bytes, and the authentication protocol that derived it, are internal to SNMPCore.
+public struct MasterKey: Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    public var description: String { get }              // "MasterKey(redacted)"
+    public var debugDescription: String { get }         // the same
+    public var customMirror: Mirror { get }             // no children
+}
+
+/// A v1/v2c community string: the redacted form ADR-04 Decision 2 consequence 4 left to this record.
+/// Redacted, copyable, Sendable, not Codable, not Equatable. No public initialiser: only `resolve` makes one.
+/// Its bytes are internal to SNMPCore; `encode` writes them into every message.
+public struct CommunityString: Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    public var description: String { get }              // "CommunityString(redacted)"
+    public var debugDescription: String { get }         // the same
+    public var customMirror: Mirror { get }             // no children
+}
 ```
+
+None of the three is `Equatable`: an equality operator over secret bytes is a timing oracle unless it is constant time, and nothing above the core needs to compare them.
 
 Before `start`, the host resolves each distinct configuration in the run once. Resolution is `@concurrent`, so it runs on neither the main actor nor the host actor. A target whose configuration fails to resolve gets a summary of `.securityFailure(.credentialUnavailable(…))` and does not start; the other targets start (FR-5). Ku and community strings live in the requests for the run's lifetime and go with the run; nothing is cached across runs. Resolution cannot be cancelled part-way, but it does at most two derivations per distinct user, about 6 to 7 ms each (ADR-04 Decision 5 consequence 3), and the host checks for cancellation before `start`.
 
@@ -260,25 +311,43 @@ The privacy password goes the same way, through the authentication protocol's `m
 
 **Option A — read inside the walk.** The request carries a credential source (a store and a reference), and the target's task calls `withCredential` after discovery. ADR-03 stays as it is and `Credential` stays non-copyable. The costs: if a store ever prompts, the user's wait happens inside a walk. For FR-6, the protocol's typed `throws(SNMPError)` would have to become untyped so it can carry `CancellationError`, and every adapter would have to abandon a read when cancelled. The community string needs its own route regardless.
 
-**Option C — a copyable, redacted `Credential`.** The store returns the credential by value. It is the simplest option. The costs: ADR-03's `borrowing` signature changes, and the password itself stays in memory for the run. The compiler refusals in the table above are lost: a copyable credential can be printed and relies on its redacted description (ADR-05), and it can sit in a request.
+**Option C — a copyable, redacted `Credential`.** The store returns the credential by value. It is the simplest option. The costs: ADR-03's `borrowing` signature changes, and the password itself stays in memory for the run. The compiler refusals for `Credential` in the table above are lost: a copyable credential can be printed and relies on its redacted description (ADR-05), and it can sit in a request. It is still not `Codable`.
 
-**Recommendation: B**, as in ADR-04. It is the only option that keeps cancellation prompt for every target, keeps the user's wait out of the walk and keeps the password out of the walk, while keeping the compile-time refusals. The ADR-03 change is the product owner's to accept. If B is not chosen, §3.3's route and the `CollectionRequest` signature are revised before this record merges; §3.1, §3.2, §3.4 and §3.5 do not change.
+**What B protects that C does not, stated in full.** The first draft of this record credited B with "keeping the compile-time refusals" and charged C with a credential that "can be printed … and can sit in a request". That overstates B. Under B the compile-time refusals protect the `Credential` only inside one borrow, during `resolve`. What lives for the whole run is a copyable, printable `ResolvedSecurity`, and it holds:
+
+- **for v3, Ku** (`MasterKey`). Ku is not the password, but it authenticates as that user on every engine that shares the password. Protecting Ku is the reason RFC 3414 §2.6 localises keys per engine;
+- **for v1 and v2c, the community string itself** (`CommunityString`). ADR-04 Decision 2 consequence 4 already found that it must cross into the target's task as a copyable value, because `encode` writes it into every message.
+
+| What lives for the run | A | B | C |
+|---|---|---|---|
+| v3 | a store and a reference; the password is read inside the walk | Ku, copyable and redacted | the password, copyable and redacted |
+| v1, v2c | the community string, which needs its own route regardless | the community string, copyable and redacted | the community string, copyable and redacted |
+| Where the compile-time refusals hold | every read, inside a borrow in the walk | only inside the borrow during `resolve` | nowhere for the secret, beyond not being `Codable` |
+| What keeps the secret out of a log for the run | the borrow | redaction (Test) | redaction (Test) |
+
+So **for v1 and v2c, B and C give the same protection.** **For v3, B's only real gain over C is that the plaintext password is not kept for the run; Ku is kept in its place.** That gain is real but narrow: a password the user also uses outside SNMP is not exposed by a leak of the run's memory or of an unredacted log, while within SNMP a leaked Ku is as good as the password on every engine that shares it. B's extra costs against C: the incompatible ADR-03 change, the 6 to 7 ms derivation per distinct user before `start` rather than inside the target's task, and a wider key-function check (§3.6). A and C's extra costs are as stated above.
+
+**Recommendation: B**, as in ADR-04, on the narrower ground just stated. Both B and C keep cancellation prompt for every target and keep the user's wait out of the walk; A keeps neither without extra machinery. Between B and C, B keeps the v3 password out of the run at the price of the ADR-03 change; for v1 and v2c the choice makes no difference. The ADR-03 change is the product owner's to accept (§2 ruling 1). If B is not chosen, §3.3's route, the `CollectionRequest` and `SetRequest` signatures, the ADR-03 entry in the header and §3.6's key-function line are revised before this record merges; §3.1, §3.2, §3.4 and §3.5 do not otherwise change.
 
 ### 3.4 SET: a separate path that spends a token (INV-5, FR-3)
 
 ```swift
 // SNMPCore
 public struct SetRequest: Sendable {
-    public static let maximumWrites = 16                 // proposal, open item 3
+    public static let maximumWrites: Int                 // §2 ruling 4: 1 for v1.0, or more with a specification amendment (§7 item 3)
     public let target: TargetID
     public let address: SNMPAddress
-    public let security: ResolvedSecurity                // resolved from the target's write credential
+    public let security: ResolvedSecurity                // resolved from the target's write credential (route: §2 ruling 1)
     public let writes: [VarBind]                         // each OID with the typed value to write
-    public let timeout: Duration
+    public let policy: RetryPolicy                       // the target's FR-22 policy; `set` derives its one wait from it
     /// Throws SNMPError.invalidConfiguration for no writes, more than maximumWrites, or an exception value.
     public init(target: TargetID, address: SNMPAddress, security: ResolvedSecurity,
-                writes: [VarBind], timeout: Duration = .seconds(2)) throws(SNMPError)
+                writes: [VarBind], policy: RetryPolicy) throws(SNMPError)
 }
+
+/// The sheet's half of INV-5's token, made when the confirmation sheet is shown, so that a token's age
+/// counts the time the user spent looking at the sheet. No public initialiser, not copyable; carries the request.
+public struct PendingConfirmation: ~Copyable, Sendable { }
 
 /// INV-5's token. No public initialiser, not copyable; it carries the request it confirms.
 public struct SetConfirmation: ~Copyable, Sendable { }
@@ -286,51 +355,83 @@ public struct SetConfirmation: ~Copyable, Sendable { }
 public enum SetOutcome: Sendable {
     case applied([VarBind])                              // noError, with the agent's response varbinds
     case rejected(errorStatus: Int, errorIndex: Int)     // RFC 3416 §4.2.5 (v1: RFC 1157 §4.1.5)
-    case notSent(SetRefusal)                             // nothing went on the wire
-    case unknown(SNMPError)                              // sent once and not answered, or cancelled after sending: the agent may have applied it
-    case securityFailure(SNMPError)                      // INV-4
+    case notSent(SetRefusal)                             // provably nothing went on the wire ("How it is checked")
+    case unknown(any Error)                              // any other failure once the SET's exchange was entered: the agent may have applied it
+    case securityFailure(SNMPError)                      // INV-4; handled as .unknown: the agent may have applied it, re-read
 }
-public enum SetRefusal: Sendable, Equatable { case expired(age: Duration), cancelled }
+public enum SetRefusal: Sendable, Equatable { case expired(age: Duration), cancelled, discoveryFailed(SNMPError) }
 
 extension SNMPEngine {
     public init(dispatcher: SNMPDispatcher, clock: some Clock<Duration> = ContinuousClock())   // gains `clock`
-    public static let confirmationLifetime: Duration     // 60 s; proposal, open item 3
+    public static let confirmationLifetime: Duration     // 60 s from beginConfirmation; proposed (§7 item 3)
+    /// Records the instant on the engine's clock. The flow calls it as it shows the sheet.
+    public func beginConfirmation(_ request: SetRequest) -> PendingConfirmation
     /// The only way to mint a SetConfirmation. The app's confirmation flow calls it, and nothing else does (§3.6).
-    public func confirmSet(_ request: SetRequest) -> SetConfirmation
-    /// Sends exactly the confirmed request, once.
+    public func confirmSet(_ pending: consuming PendingConfirmation) -> SetConfirmation
+    /// Sends exactly the confirmed request: once, or twice only under the resend rule below.
     @concurrent public func set(_ confirmation: consuming SetConfirmation) async -> SetOutcome
+}
+
+// SNMPCore — ADR-02 §3.4's OutboundRequest with one optional field added (header: Supersedes in part).
+// Existing call sites, including trailing-closure ones, still compile: the new parameter comes last, with a default.
+public struct OutboundRequest: Sendable {
+    public enum Version: Sendable, Hashable { case v1, v2c, v3 }
+    public let version: Version
+    public let encode: @Sendable (_ requestID: Int32, _ msgID: Int32) throws -> [UInt8]
+    /// Called by `exchange` on the caller's task, after the request holds its ceiling slot and immediately
+    /// before each attempt is encoded and sent. If it throws, nothing is sent for that attempt, the request
+    /// ends, and `exchange` rethrows the hook's error unchanged. Of the same kind as ADR-04 open item 6's
+    /// validation closure.
+    public let beforeSend: (@Sendable () throws -> Void)?
+    public init(version: Version, encode: @escaping @Sendable (Int32, Int32) throws -> [UInt8],
+                beforeSend: (@Sendable () throws -> Void)? = nil)
 }
 ```
 
-**How a token is minted.** `confirmSet` records the time on the engine's clock and wraps the request. The app mints in one function, after the user's answer, and spends the token in the same task:
+**How a token is minted.** `beginConfirmation` records the instant on the engine's clock and wraps the request; `confirmSet` turns it into the token. The app does both in one function, around the user's answer, and spends the token in the same task:
 
 ```swift
 // Sources/SNMPToolkitApp/Set/SetFlow.swift — the only caller of confirmSet in the app.
 @MainActor
 static func run(_ request: SetRequest, engine: SNMPEngine, sheet: SetConfirmationSheet) async -> SetOutcome? {
+    let pending = engine.beginConfirmation(request)                    // the token's age counts from here
     guard await sheet.ask(request) == .confirmed else { return nil }   // the sheet's buttons only answer
-    let confirmation = engine.confirmSet(request)
+    let confirmation = engine.confirmSet(pending)
     return await engine.set(confirmation)
 }
 ```
 
 This shape is forced. A button cannot mint the token and hand it to a `Task`: the compiler refuses to consume a non-copyable value captured by an escaping closure (§3.7).
 
-**How it is checked.** Before anything goes on the wire, `set` checks the token's age against `confirmationLifetime` on the engine's clock and returns `.notSent(.expired(age:))` if it is older. It then checks for cancellation and returns `.notSent(.cancelled)` if the task has been cancelled. There is no separate request to compare the token with, because the token is the request. Then `set` makes one exchange through the dispatcher with `retries: 0`, so the FR-5 ceiling covers SETs too.
+**How it is checked.** In this order:
 
-**Why a held token expires.** A non-copyable value can still be kept in a class's stored property and spent later; the prototype compiles that (§3.7). The lifetime bounds how stale a confirmation can be when it is spent.
+1. **On entry**, `set` checks the token's age against `confirmationLifetime` on the engine's clock and returns `.notSent(.expired(age:))` if it is older. It then checks for cancellation and returns `.notSent(.cancelled)`.
+2. **Discovery finishes before a SET is sent.** For a v3 target whose engine ID, boots and time are not yet known, `set` first runs discovery, which is separate exchanges that write nothing, and sends the SET only after it has succeeded. A discovery failure returns `.notSent(.discoveryFailed(_))`, and cancellation during it `.notSent(.cancelled)`. The USM record decides discovery's details.
+3. **One exchange** through the dispatcher with `retries: 0`, so the FR-5 ceiling covers SETs too. Its `OutboundRequest` carries a pre-send hook that repeats both checks **after the slot is held and immediately before the datagram is encoded and sent**. This is where the check has to be: under ADR-04 Decision 3, `exchange` first waits, first come first served, for a ceiling slot, for as long as slow targets hold the slots ("How the design fails"), so a token checked only on entry at 59 s could go on the wire many seconds later. A hook refusal is rethrown unchanged and returns `.notSent(.expired(age:))` or `.notSent(.cancelled)`.
+4. **Any other failure once the SET's `exchange` has been entered returns `.unknown`**, with the error. That includes cancellation while the request is still queued for a slot. `exchange` throws `CancellationError` whether it was waiting for a slot or for a response, and its untyped error does not say whether the datagram was sent (ADR-04's FR-6 table). Making it say so would change ADR-02's error contract, and this record does not. It accepts that a SET cancelled in the queue is reported as `.unknown` although nothing was sent. The app's re-read settles it. So `.notSent` is only ever returned from steps 1 to 3, all of them before the SET's first datagram, and it always means nothing was sent.
+5. **`.securityFailure` does not mean the write was not applied.** A reply with a matching id that fails authentication (ADR-04 open item 6) can arrive after the agent applied the write. The app handles `.securityFailure` exactly as `.unknown`: it says the write may have been applied and offers a re-read. INV-4 still holds, because it is reported as a security error, never as applied, rejected or empty.
 
-**A SET is sent exactly once.** Nothing retries a SET automatically, because a retransmission is a second write. For a `TestAndIncr` spin lock (RFC 2579) or a `RowStatus` `createAndGo`, the second write fails after the first one succeeded, and the user would be told "rejected" about a write that was applied. So a timeout returns `.unknown`. The app says so, offers to re-read the values with a GET, and a resend needs a new confirmation. There is one exception, which the USM record may use: a USM report showing that the message was not processed (an unknown engine ID during discovery, or not in the time window; RFC 3414 §3.2) allows one resend after resynchronisation, because the agent dropped the message before any write.
+There is no separate request to compare the token with, because the token is the request. `set` waits for its one attempt for the target's `policy.maximumTimeout`, the longest that target's FR-22 policy ever waits for a single attempt (proposed, §7 item 3). It sends `RetryPolicy(timeout: policy.maximumTimeout, retries: 0, backoffFactor: policy.backoffFactor, maximumTimeout: policy.maximumTimeout)`, which satisfies ADR-02's validation by construction.
+
+**Why the lifetime runs from the sheet.** A non-copyable value can still be kept in a class's stored property and spent later; the prototype compiles that (§3.7). Measured from the mint, the lifetime would bound only such a held token, because the flow mints after the sheet answers and spends at once. Measured from `beginConfirmation`, it also bounds how stale the confirmed view is, including the current value the sheet showed when it opened. A sheet left open past the lifetime confirms into `.notSent(.expired)`, and the app re-reads and asks again.
+
+**A SET is sent once, and a second time only when the agent provably did not process the first.** Nothing retries a SET automatically, because a retransmission is a second write. For a `TestAndIncr` spin lock (RFC 2579) or a `RowStatus` `createAndGo`, the second write fails after the first one succeeded, and the user would be told "rejected" about a write that was applied. So a timeout returns `.unknown`. The app says so, offers to re-read the values with a GET, and a resend needs a new confirmation. The USM record may resend once, after resynchronisation, in exactly two cases and no others:
+
+- after an **authenticated** `notInTimeWindow` report: RFC 3414 §3.2 step 7 sends that report at authNoPriv, so its MAC is checked before it is believed;
+- when the SET was sent with **no engine ID**, so the agent could not have processed it. Because discovery finishes before a SET is sent (step 2), v1.0 never sends one that way. The case is named so that the bound below covers it.
+
+The resend runs through the same pre-send hook, so a token that has expired meanwhile still does not fire. An `unknownEngineID` report is sent unauthenticated (RFC 3414 §3.2 step 3), so anyone on the path can forge one. If one answers a SET that was sent under a known engine ID, it never causes a resend: a forged report that arrives before the real response would otherwise cause a second write after the first was applied, which is the `TestAndIncr` and `createAndGo` failure this section exists to prevent. The outcome is then `.unknown`. The USM record decides the rest of report handling; **this bound is this record's: at most two datagrams per token, the second only under this rule.**
 
 **What holds INV-5**
 
 | Property | Held by | Strength |
 |---|---|---|
-| No SET without a token | only `set(_: consuming SetConfirmation)` writes; no `Operation` case writes; `SetConfirmation` has no public initialiser | Compiler |
-| What is sent is what was confirmed | the token carries the request | Compiler, by construction |
-| One token, one write | `consuming`, and not copyable | Compiler |
-| At most one datagram per token | `set` uses `retries: 0` | Test |
-| A stale token does not fire | the 60 s lifetime on the engine's clock | Test |
+| No SET without a token | only `set(_: consuming SetConfirmation)` writes; no `Operation` case writes; `SetConfirmation` and `PendingConfirmation` have no public initialiser | Compiler (safe Swift) |
+| What is sent is what was confirmed | the token carries the request, bound when the sheet is shown | Compiler (safe Swift), by construction |
+| One token, one write | `consuming`, and not copyable | Compiler (safe Swift) |
+| At most two datagrams per token, the second only after an authenticated `notInTimeWindow` report or for a SET sent with no engine ID | `set` uses `retries: 0`; the resend rule above | Test: a lost reply sends one datagram; a forged, unauthenticated `unknownEngineID` report answering a SET sent under a known engine ID sends no second one and returns `.unknown`; an authenticated `notInTimeWindow` report sends exactly one more |
+| A stale token does not fire | the lifetime on the engine's clock, measured from `beginConfirmation`, checked by the pre-send hook after the slot is held and discovery is done, immediately before each send | Test: a token that ages past the lifetime while queued behind a held slot sends nothing and returns `.notSent(.expired)` |
+| `.notSent` means nothing was sent | `.notSent` comes only from the entry check, discovery and the hook, all before the SET's first datagram; every other failure after `exchange` is entered is `.unknown` | Test |
 | **Only the confirmation flow mints** | **Not structural.** `confirmSet` is public, so any module that imports `SNMPCore` can call it. The check in §3.6 allows one file in the app, one proposed file in `snmpcli`, and none in `AIBridge`; a UI test drives the sheet | Check and test |
 | **The user saw what will be written** | **Not structural.** The sheet displays the `SetRequest` it was handed, and a UI test holds that | Test |
 | FR-3: off by default, with a write credential | the app enables its Set command only for a target with SET turned on and a write credential configured; persisted off by default (ADR-06) | Test |
@@ -344,10 +445,10 @@ INV-5's own test is "the SET path asserts a confirmation token that only the UI 
 ```swift
 // SNMPCore
 public struct PollSpec: Sendable {
-    public static let maximumOIDs = 16                  // per target per chart; the core adds sysUpTime.0
+    public static let maximumOIDs = 16                  // per target per chart; the core adds sysUpTime.0; proposed (§7 item 3)
     public let oids: [OID]
-    public let interval: Duration                       // at least 1 s
-    public let silenceLimit: Duration                   // stop with .timedOut after this long without an answer
+    public let interval: Duration                       // at least 1 s; proposed (§7 item 3)
+    public let silenceLimit: Duration                   // stop with .timedOut after this long without an answer; proposed (§7 item 3)
     public init(oids: [OID], interval: Duration, silenceLimit: Duration = .seconds(60)) throws(SNMPError)
 }
 
@@ -360,9 +461,14 @@ public enum SeriesPoint: Sendable, Equatable {
     case gap(at: ContinuousClock.Instant, SeriesGap)
 }
 public enum SeriesGap: Sendable, Equatable { case first, agentRestarted, counterDiscontinuity, missingSample }
+// SeriesGap has no security case on purpose: a security failure is never a gap (INV-4, below).
 ```
 
 **The poll.** Each tick is one GET carrying `sysUpTime.0` first and then the series' OIDs, so all the samples in a tick come from the same moment. Ticks run on the engine's clock. A tick that falls due while the previous exchange is still in flight is skipped, so requests never pile up. Each answered tick is one `VarBindBatch`, with its `receivedAt`. A lost tick is a gap, not a stop. The poll stops when cancelled, or with `.timedOut` after `silenceLimit` without an answer. Until then, a silent polled target holds one ceiling slot, which adds a case to ADR-04's "How the design fails". A poll's outcome carries only the last tick's varbinds. The history lives in the app's series store, so a poll's memory does not grow with time, and `WalkLimit` does not apply to it.
+
+**A security failure on any tick finishes the poll with `.securityFailure` (INV-4).** A tick whose response fails authentication or decryption is never a lost tick and never `.gap(.missingSample)`: that would be the empty result INV-4 forbids. The poll ends at once, `.finished(target, .securityFailure(_))` is its last event, and the series store treats that target's points already shown as §2 ruling 2 decides for rows (§3.2 rule 8): under the strict reading they are dropped and the error is shown in their place. If the USM record decides, under ADR-04 open item 6, that a matching datagram failing authentication is discarded while the exchange keeps waiting for the genuine reply, a poll follows that rule exactly as a walk does. In no case does an authentication or decryption failure become a gap. A test in the no-network suite sends a tick whose response carries a corrupted MAC and asserts that the poll finishes with `.securityFailure` and emits no `.gap`.
+
+**A tick answered with `tooBig`.** Sixteen `Counter64` OIDs plus `sysUpTime.0` make a response of about 600 octets over v3 authPriv, above the 484-octet floor RFC 3412 sets for `msgMaxSize`. An agent that accepts only the floor answers `tooBig`. The poll then splits the tick's OIDs into two GETs, each carrying `sysUpTime.0` first, halving again on a further `tooBig`, and keeps that split for the rest of the poll. A tick is then several GETs sent one after another, and it is in flight until the last one is answered. The samples of each GET share that GET's `sysUpTime`, which is all the rate rule needs, because rates are per counter. A GET of one OID that is still answered `tooBig` stops the poll with ADR-04's `CollectionStop.agentMisbehaved`.
 
 **The rate rule**
 
@@ -373,32 +479,52 @@ public enum SeriesGap: Sendable, Equatable { case first, agentRestarted, counter
 | A `Counter32` went backwards | one wrap: new + 2³² − old | RFC 2578 §7.1.6. Two wraps within one interval cannot be seen: a 10 Gb/s interface wraps `ifInOctets` every 3.4 s, so charts of fast links use the Counter64 `ifHC…` objects (RFC 2863) |
 | A `Counter64` went backwards | `.gap(.counterDiscontinuity)` | a genuine 64-bit wrap is implausible, so a decrease is a reset |
 | An exception value, a changed type, or a lost tick | `.gap(.missingSample)` | |
+| A tick that fails authentication or decryption | no point: the poll finishes with `.securityFailure` | INV-4: a security failure is never an empty or partial result, so never a gap |
 | `Gauge32`, `Integer32`, `TimeTicks` | plotted as values, with no rate | |
 
 The rule lives in the core so that the headless collector does not have to write it again. The pump applies it to each batch. FR-24, which forbids Counter64 rates against a v1 target, is checked when a chart is configured, above the core, because only the MIB knows an object's type before a value arrives.
 
-**In the app.** A `SeriesStore` actor per chart run keeps a full-resolution ring per series, sized as window ÷ interval (an hour at 1 s is 3,600 points). The main actor receives at most 600 points per series. A longer window is decimated off the main actor, keeping the minimum and maximum of each bucket so peaks survive. The main actor gets one update per tick per chart, so eight series hold at most 4,800 points on the main actor, whatever the window. Export reads the full resolution from the store. The NFR-4 run confirms 600 (open item 3).
+**In the app.** A `SeriesStore` actor per chart run keeps a full-resolution ring per series, sized as window ÷ interval (an hour at 1 s is 3,600 points). The main actor receives at most 600 points per series (proposed, §7 item 3). A window of at most 600 samples is shown as it is, one point per sample (10 minutes at 1 s). A longer window is decimated off the main actor into **300 buckets, each drawn as two points, its minimum and its maximum**, so peaks survive: 300 × 2 = 600 points, not 600 buckets. The main actor gets one update per tick per chart, so eight series hold at most 4,800 points on the main actor, whatever the window. Export reads the full resolution from the store. The NFR-4 run confirms 600 (open item 3).
 
-### 3.6 The checks (added to ADR-04 Decision 6)
+### 3.6 The checks (added to ADR-04 Decision 6; one line replaces one of its lines)
 
 ```sh
 S='--include=*.swift'
 A=Sources/SNMPToolkitApp
-# Security.framework only in the Keychain adapter (ADR-01 §3.2 clarification 3).
+U="Sources/SNMPToolkitApp Sources/AIBridge Sources/snmpcli"
+# Security.framework only in the Keychain adapter (ADR-01 §3.2 clarification 3): the import, and its symbols.
 grep -rlE '^[[:space:]]*(@[A-Za-z_]+[[:space:]]*)*(public|package|internal|private|fileprivate)?[[:space:]]*import[[:space:]]+Security([^[:alnum:]_]|$)' $A "$S" 2>/dev/null | grep -vE '/KeychainCredentialStore\.swift$'
+grep -rlE 'SecItem[A-Za-z]*\(|kSec[A-Z]' $A "$S" 2>/dev/null | grep -vE '/KeychainCredentialStore\.swift$'
 # A secret becomes a Credential only in the two stores.
-grep -rl 'Credential(bytes:' $A "$S" 2>/dev/null | grep -vE '/(KeychainCredentialStore|SessionCredentialStore)\.swift$'
+grep -rlE 'Credential(\.init)?\(bytes:' $A "$S" 2>/dev/null | grep -vE '/(KeychainCredentialStore|SessionCredentialStore)\.swift$'
 # SET confirmations are minted in one file of the app, one file of snmpcli, and nowhere else.
-grep -rl 'confirmSet(' $A "$S" 2>/dev/null | grep -vE '/SetFlow\.swift$'
-grep -rl 'confirmSet(' Sources/snmpcli "$S" 2>/dev/null | grep -vE '/SetPrompt\.swift$'
-grep -rlE 'confirmSet\(|SetConfirmation' Sources/AIBridge "$S" 2>/dev/null
+# The pattern is the portable spelling of `confirmSet\b`: it matches a call and a function reference alike.
+grep -rlE 'confirmSet([^[:alnum:]_]|$)' $A "$S" 2>/dev/null | grep -vE '/SetFlow\.swift$'
+grep -rlE 'confirmSet([^[:alnum:]_]|$)' Sources/snmpcli "$S" 2>/dev/null | grep -vE '/SetPrompt\.swift$'
+grep -rlE 'confirmSet([^[:alnum:]_]|$)|SetConfirmation|PendingConfirmation' Sources/AIBridge "$S" 2>/dev/null
+# The app and AIBridge never derive or localise a key. Replaces ADR-04 Decision 6's `localizedKey(` line.
+grep -rnE '(masterKey|localizedKey|privacyKey)\(' Sources/SNMPToolkitApp Sources/AIBridge "$S" 2>/dev/null
+# Unsafe code above the core: strict memory safety makes every unacknowledged use an error, so list the acknowledged ones.
+grep -rnE '(^|[^[:alnum:]_])unsafe[[:space:]]|@unsafe' $U "$S" 2>/dev/null | grep -vE '/KeychainCredentialStore\.swift:'
 ```
 
-Each line prints nothing on today's tree, and each fired on a fixture written to trip it, while the allowed files, and an `import SecurityInterface`, did not. As in ADR-04, they catch the plain mistake, not a determined one, and the file names they allow are part of this record: a rename updates it.
+The lines of the first draft printed nothing on the tree as it was then, and each fired on a fixture written to trip it, while the allowed files, and an `import SecurityInterface`, did not. The lines added after review (the `Security` symbols, `Credential.init(bytes:`, `confirmSet` as a reference, `PendingConfirmation`, the key functions, `unsafe`) have not been run yet. As in ADR-04, they catch the plain mistake, not a determined one, and the file names they allow are part of this record: a rename updates it. Each reads call text, which is why they match `confirmSet` as a word and not `confirmSet(`: `let mint = engine.confirmSet; mint(r)` mints without the text `confirmSet(`, and the independent review did exactly that. The symbol line exists because it was not possible to check on Linux whether Darwin's `Foundation` or `AppKit` make `Security`'s C API visible without `import Security`. If they do, the import line alone misses a Keychain call. Whether they do is a Mac check (§7 item 5). The Keychain adapter is the one file expected to need `unsafe`, for `SecItemCopyMatching`'s out-parameter.
 
-**The negative-compilation harness** (SC-5 counts it as a check) holds the compiler rows in §3.3 and §3.4 with one fixture each: a token made outside the core, a token spent twice, a token stored in a copyable struct or an array, a token consumed inside a `Task` closure, a `Credential` printed or interpolated, its bytes read from outside the core, a `ResolvedSecurity` made outside the core. **The harness must compile through SIL** (a full build, or `swiftc -emit-sil`), not `-typecheck`. Move checking runs in SIL, so `-typecheck` accepts a token spent twice and a token consumed in a closure, and a harness built on it would pass for the wrong reason (§3.7).
+**Strict memory safety above the core.** The modules that use the core from above it build with strict memory safety and warnings as errors. That is what turns "Compiler" in §3.3 and §3.4 into "Compiler (safe Swift)" for code that has not opted out with `unsafe`, and the last check line lists every place that has:
+
+```swift
+// Package.swift (needs swift-tools-version 6.2; the manifest is at 6.0 today, and the story that first builds these targets raises it).
+let aboveTheCore: [SwiftSetting] = [.strictMemorySafety(), .treatAllWarnings(as: .error)]
+// .executableTarget(name: "SNMPToolkitApp", …, swiftSettings: aboveTheCore)
+// .target(name: "AIBridge", …, swiftSettings: aboveTheCore)
+// .executableTarget(name: "snmpcli", …, swiftSettings: aboveTheCore)
+```
+
+**The negative-compilation harness** (SC-5 counts it as a check) holds the compiler rows in §3.3 and §3.4 with one fixture each: a token or a `PendingConfirmation` made outside the core, a token spent twice, a token stored in a copyable struct or an array, a token consumed inside a `Task` closure, a `Credential` printed or interpolated, its bytes read from outside the core, a `ResolvedSecurity`, `MasterKey` or `CommunityString` made outside the core, a `Codable` struct holding a `ResolvedSecurity` (its conformance fails to synthesise), and, in a module built with `aboveTheCore`, the two unsafe-pointer escapes of §3.3 written without `unsafe`. **The harness must compile through SIL** (a full build, or `swiftc -emit-sil`), not `-typecheck`. Move checking runs in SIL, so `-typecheck` accepts a token spent twice and a token consumed in a closure, and a harness built on it would pass for the wrong reason (§3.7).
 
 ### 3.7 Validation (Linux, Swift 6.4.2)
+
+**Since the independent review, not compiled.** The declarations added or changed in answer to the review have not been built: `MasterKey`, `CommunityString`, the explicit members of `ResolvedSecurity`, `BoundedUpdate`'s bounded initialiser, `PendingConfirmation` with `beginConfirmation` and the new `confirmSet`, `SetRequest.policy`, `SetOutcome.unknown(any Error)`, `SetRefusal.discoveryFailed`, the pre-send hook in `OutboundRequest`, the revised `SetFlow`, and the `Package.swift` settings in §3.6. The environment that revised the record had no Swift toolchain. They are unverified until the harness of §3.6 builds them. Everything below describes the first draft.
 
 Every core declaration in §3.1 and §3.3 to §3.5 was transcribed into a throwaway package outside this repository and built with the official Swift 6.4.2 toolchain (GPG-verified) on Ubuntu 24.04, in Swift 6 language mode with `-strict-concurrency=complete` and warnings as errors. The package had an `SNMPCore` importing only `Foundation`, and a second module standing in for the app. The second module held an in-memory store in place of the Keychain adapter, the `SetFlow` of §3.4, a `RowStore` and `RunKey`. Stand-ins replaced what other records own: the dispatcher behind `SNMPEngine` (a one-attempt fake wire), `OID`, `SNMPValue`, and the password-to-key hash. The two ADR-03 requirements of §3.3 were therefore not compiled; `MasterKey` and the derivation through the store were.
 
@@ -455,8 +581,10 @@ A token minted and spent in one async function compiles, and so does a token kep
 
 **What it costs, accepted knowingly**
 
-- Under B, a change to ADR-03 §2.3 (§3.3), which the product owner accepts or not.
-- Ku in memory for the length of a run, and every credential read up front.
+- Under B, an incompatible change to ADR-03 §2.3 (§3.3), which the product owner accepts or not (§2 ruling 1).
+- Ku and community strings in memory for the length of a run, copyable and kept out of logs only by redaction; every credential read up front.
+- A SET cancelled while it is queued for a ceiling slot is reported as `.unknown`, although nothing was sent, because `exchange` does not report whether it sent.
+- Rows dropped under INV-4 keep their stable indices, so their memory is held until the run is replaced or discarded.
 - An `NSTableView` bridged into a SwiftUI app, and a moment of placeholders while a scroll's window is fetched.
 - "Only the flow mints" is a check, not a type.
 - A SET is never retried, so the user deals with `.unknown`.
@@ -464,13 +592,13 @@ A token minted and spent in one async function compiles, and so does a token kep
 - Unprovisioned development builds forget their secrets at quit.
 - The bundle identifier is frozen before the first release that stores a secret.
 
-**Artefacts changed with this record.** `README.md` lists ADR-03 and this record beside the others. The specification is not changed; the numbers it should state are open item 3.
+**Artefacts changed with this record.** `README.md` lists ADR-03 and this record beside the others, and no longer labels the merged ADR-02 and ADR-04 "(proposed)". The specification is not changed by this record; the numbers it should state are open item 3, and the amendment of its §3 non-goal, if the product owner chooses it, is §2 ruling 4.
 
 **Not decided here.** Where the new error cases sit in the taxonomy (ADR-05). How `TargetID`, `CredentialReference`, `SecurityConfiguration` and investigations are persisted and migrated (ADR-06). The MIB browsing surface (MIBKit's story). USM engine state and report handling (the USM record). `AIBridge`.
 
 ## 6. Reversal cost and reopening triggers
 
-The store protocol and the token are small types, and reversing either touches the core's SET path and one adapter. Choosing A or C instead of B reshapes `resolve` and ADR-03 §2.3 and nothing else in this record. Going back from the window model to full rows on the main actor needs no core change.
+The store protocol and the token are small types, and reversing either touches the core's SET path and one adapter. Choosing A or C instead of B reshapes `resolve`, ADR-03 §2.3 and §3.6's key-function line, and nothing else in this record. Going back from the window model to full rows on the main actor needs no core change.
 
 This record is **reopened**, by a superseding record, when any of these is observed:
 
@@ -482,11 +610,28 @@ This record is **reopened**, by a superseding record, when any of these is obser
 
 ## 7. Open items
 
-1. **The password route (§3.3): A, B or C.** The product owner's decision. The recommendation is B, which changes ADR-03 §2.3.
-2. **INV-4 and rows already shown** (ADR-04 open item 5). Still the product owner's reading; §3.2 rule 8 implements the strict one.
-3. **Numbers to confirm, and for the specification to state:** the confirmation lifetime (60 s); at most 16 writes per SET; the SET timeout (2 s); a poll interval of at least 1 s; at most 16 OIDs per target per chart; the silence limit (60 s); at most 600 displayed points per series; and FR-17's selectable windows (proposal: 1, 5, 15 and 60 minutes).
+1. **The password route (§3.3): A, B, C or another.** Decided by §2 ruling 1, and open until that ruling is written there. The recommendation is B, on the comparison as restated in §3.3; B changes ADR-03 §2.3 incompatibly.
+2. **INV-4 and rows already shown** (ADR-04 open item 5). Decided by §2 ruling 2, and open until that ruling is written there. §3.2 rule 8 and §3.5 implement the strict reading meanwhile.
+3. **Numbers.** Every number below is **proposed — for the product owner's ruling** (§2 ruling 3: accepted as stated here, or proposals for the specification to state). Each carries its basis.
+   - **Confirmation lifetime: 60 s, measured from when the sheet is shown** (`beginConfirmation`, §3.4). Proposed — for the product owner's ruling. Basis: measured from the mint, a lifetime would only limit a held token, because the flow mints after the sheet answers and spends at once; measured from the sheet, it also limits how stale the confirmed view can be, including the current value the sheet read when it opened. A minute is ample to read a sheet of a few values; a sheet left open longer is re-read and confirmed again.
+   - **Writes per SET** (§2 ruling 4). Two alternatives, side by side. The product owner rules on the specification, not on a number:
+
+     | | (a) `maximumWrites = 1` for v1.0 | (b) `maximumWrites = 16`, with a specification amendment |
+     |---|---|---|
+     | The specification | unchanged. Its §3 non-goal, "SET exists for single values under confirmation; this is not a provisioning tool", holds as written | §3's non-goal is amended, for example to "SET exists for one confirmed request of at most 16 values that the agent applies together (RFC 3416 §4.2.5); this is not a provisioning tool". The product owner rules on that text |
+     | What it serves | a single writable scalar, such as `sysContact.0` or `ifAdminStatus.n` | also the writes that must travel in one PDU: creating a conceptual row with `RowStatus` `createAndGo`, which an agent may refuse unless the row's columns that have no default are set in the same PDU (RFC 2579, `RowStatus`); and a `TestAndIncr` spin lock set in the same PDU as the objects it guards (RFC 2579, `TestAndIncr`) |
+     | What a v1.0 user does instead | creates a row with `createAndWait`, then sets each column, then `active`, each value confirmed separately, where the agent supports `createAndWait`; has no spin-lock-guarded write | — |
+     | Basis for the number | one value per confirmation, as the non-goal says | RFC 3416 sets no limit on varbinds per SET. 16 is a legibility bound for one confirmation sheet, not a protocol one |
+     | Cost | none now; raising it later changes a constant and the sheet, not a type | a sheet that shows up to 16 values legibly; §6 trigger 4 then reads against the amended non-goal |
+   - **SET timeout: derived from the target's `RetryPolicy`, not a constant.** Proposed — for the product owner's ruling. One attempt (`retries: 0`) that waits the target's `policy.maximumTimeout`, FR-22's configurable per-target cap: the longest that target's policy ever waits for a single attempt. That is 8 s under ADR-02's proposed FR-22 defaults (§8 item 3). Basis: a SET is never retried, so it gets the longest single wait the user configured, not the first attempt's shorter one. It replaces the first draft's separate 2 s constant.
+   - **Poll interval: at least 1 s.** Proposed — for the product owner's ruling. Basis: NFR-4 states 1 s, and at a shorter interval the arrival-time base of §3.5's rate rule gains nothing while `sysUpTime`'s centisecond resolution becomes a larger share of the interval. Argued adequately in the first draft.
+   - **OIDs per target per chart: at most 16.** Proposed — for the product owner's ruling. Basis: twice NFR-4's 8 series, the margin ADR-04 took for the ceiling; it is not derived from message size. A tick of 16 `Counter64` OIDs plus `sysUpTime.0` is a response of about 600 octets over v3 authPriv, above RFC 3412's 484-octet floor for `msgMaxSize`, so an agent that accepts only the floor answers `tooBig`; the tick then splits (§3.5).
+   - **Silence limit: 60 s.** Proposed — for the product owner's ruling. Basis: several of FR-22's worst-case unanswered requests (7 s each under ADR-02's proposed defaults), so a short outage leaves gaps in a chart instead of ending it, while a target that has gone away releases its ceiling slot within a minute.
+   - **Displayed points per series: at most 600, which is 300 buckets × 2 points** (each bucket's minimum and maximum), not 600 buckets. Proposed — for the product owner's ruling. A window of at most 600 samples is shown undecimated. Basis: 300 buckets is one per 2 pt across a 600 pt-wide plot, about the narrowest a minimum-to-maximum bar can be drawn and still be seen; eight series then put at most 4,800 points on the main actor. Not measured: the NFR-4 run confirms it.
+   - **Rows in a window: at most 512**, and **ordering rebuilds no more often than every 1 s while rows arrive** (§3.2 rules 2 and 5). Proposed — for the product owner's ruling. Basis: §3.2 rule 5 for 512 (argued adequately); the 1 s floor keeps a re-sort of millions of rows from running continuously while still showing new rows in order within a second or so.
+   - **FR-17's selectable windows: 1, 5, 15 and 60 minutes.** Proposed — for the product owner's ruling. Basis: the longest, 60 minutes at 1 s, is the 3,600-point ring of §3.5.
 4. **The grid technology**: `NSTableView` unless the NFR-10 run, with ADR-04's run-loop probe on the baseline Mac, shows a SwiftUI `Table` over the window model inside 16 ms. The same run confirms the 512-row window.
-5. **To run on a Mac** (not run here; they join the project's dated list of Mac-only checks): the Keychain adapter on a provisioned, sandboxed build (save, read and delete; the item not synchronizable; the status mapping), and `.storeUnavailable` from an unprovisioned `swift run` build. On the hardware bench's managed switch, used as a live agent: a SET of a writable scalar such as `sysContact.0` is `.applied`; a SET of `sysDescr.0` is `.rejected` with `notWritable` (v2c) or `noSuchName` (v1); and a SET whose reply is dropped is `.unknown`, with exactly one datagram sent.
+5. **To run on a Mac** (not run here; they join the project's dated list of Mac-only checks): the Keychain adapter on a provisioned, sandboxed build (save, read and delete; the item not synchronizable; the status mapping), and `.storeUnavailable` from an unprovisioned `swift run` build. Whether a file that imports `Foundation` or `AppKit` but not `Security` can call `SecItemCopyMatching` (§3.6's symbol line). On the hardware bench's managed switch, used as a live agent: a SET of a writable scalar such as `sysContact.0` is `.applied`; a SET of `sysDescr.0` is `.rejected` with `notWritable` (v2c) or `noSuchName` (v1); and a SET whose reply is dropped is `.unknown`, with exactly one datagram sent.
 6. **Headless credential stores**: which `CredentialStore` `snmpcli` and the Linux collector ship, and how the specification words INV-1 for them.
 7. **Counter discontinuities**: whether interface charts consult `ifCounterDiscontinuityTime` (RFC 2863) as well as `sysUpTime`.
 8. **Building it**: the check lines, the negative-compilation harness and the tests named here are not yet written; each belongs to the story that first needs it.
